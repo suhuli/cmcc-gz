@@ -48,6 +48,10 @@ class FakeCloud:
         self.fail_new_rename = False  # True 时：把临时上传文件改为目标名会失败
         self.fail_move = False
 
+    def resolve_connection(self) -> dict[str, Any]:
+        self._count("resolve")
+        return {"profile": "pc"}
+
     # ------------------------------------------------------------ 工具
     def _count(self, name: str) -> None:
         self.calls[name] = self.calls.get(name, 0) + 1

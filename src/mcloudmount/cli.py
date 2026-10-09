@@ -139,7 +139,12 @@ def cmd_mount(args: argparse.Namespace) -> int:
 def cmd_panel(args: argparse.Namespace) -> int:
     from .panel import DEFAULT_PANEL_PORT, serve
 
-    return serve(port=args.port or DEFAULT_PANEL_PORT, open_browser=not args.no_browser)
+    return serve(
+        port=args.port or DEFAULT_PANEL_PORT,
+        open_browser=not args.no_browser,
+        use_tray=not args.no_tray,
+        background=args.background,
+    )
 
 
 def cmd_umount(args: argparse.Namespace) -> int:
@@ -153,7 +158,12 @@ def cmd_umount(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mcloudmount")
-    parser.set_defaults(func=cmd_panel, port=None, no_browser=False)
+    # 顶层参数：无子命令时等同于 `panel`（双击 exe / 开机自启使用）
+    parser.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--no-browser", action="store_true", default=False, help=argparse.SUPPRESS)
+    parser.add_argument("--no-tray", action="store_true", default=False, help=argparse.SUPPRESS)
+    parser.add_argument("--background", action="store_true", default=False, help=argparse.SUPPRESS)
+    parser.set_defaults(func=cmd_panel)
     sub = parser.add_subparsers(dest="command")
 
     p_login = sub.add_parser("login", help="手机号 + 短信验证码登录")
@@ -176,6 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_panel = sub.add_parser("panel", help="打开网页控制面板（默认）")
     p_panel.add_argument("--port", type=int, default=None, help="面板端口，默认 8390")
     p_panel.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    p_panel.add_argument("--no-tray", action="store_true", help="不显示系统托盘图标")
+    p_panel.add_argument("--background", action="store_true", help="后台模式（开机自启使用），不弹出浏览器")
     p_panel.set_defaults(func=cmd_panel)
     return parser
 

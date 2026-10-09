@@ -61,6 +61,7 @@ class Config:
     env: str = "prod"           # prod / test / dev
     verify_ssl: bool = True
     log_level: str = "INFO"
+    auto_mount: bool = False    # 启动面板/托盘时是否自动挂载
 
     # ---------------------------------------------------------------- 读写
     @classmethod
@@ -90,7 +91,7 @@ class Config:
         for key, value in mnt.items():
             if hasattr(cfg.mount, key):
                 setattr(cfg.mount, key, value)
-        for key in ("api_host", "env", "verify_ssl", "log_level"):
+        for key in ("api_host", "env", "verify_ssl", "log_level", "auto_mount"):
             if key in raw:
                 setattr(cfg, key, raw[key])
         return cfg
@@ -105,6 +106,7 @@ class Config:
             "env": self.env,
             "verify_ssl": self.verify_ssl,
             "log_level": self.log_level,
+            "auto_mount": self.auto_mount,
         }
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".config-", suffix=".json")
         try:

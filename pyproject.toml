@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcloudmount"
-version = "0.2.0"
+version = "0.3.0"
 description = "Mount China Mobile Cloud Drive as a local drive"
 readme = "README.md"
 license = "MIT"
@@ -28,6 +28,7 @@ where = ["src"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pyflakes>=3"]
+windows = ["pystray>=0.19", "Pillow>=10"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
