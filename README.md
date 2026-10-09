@@ -28,40 +28,42 @@ pip install -e .
 
 ## 使用
 
+### 网页控制面板（推荐）
+
+双击 `mcloudmount.exe`（或执行 `mcloudmount` / `mcloudmount panel`），会自动在浏览器打开控制面板：
+
+- 手机号 + 短信验证码登录
+- 一键挂载 / 卸载盘符
+- 查看登录状态、盘符、WebDAV 服务状态
+- 查看运行日志
+
+面板只监听 `127.0.0.1:8390`，关闭控制台窗口即退出，退出前会自动卸载盘符。
+
+### 命令行
+
 ```powershell
 python -m mcloudmount login --phone 13800000000
 python -m mcloudmount mount
 python -m mcloudmount status
+python -m mcloudmount status --json
 python -m mcloudmount umount
 ```
 
-登录时会在终端等待短信验证码。验证码成功登录后，授权信息会保存到：
-
-```text
-%APPDATA%\mCloudMount\config.json
-```
-
-不要把这个文件提交到仓库或分享给他人。
+登录后授权信息保存在 `%APPDATA%\mCloudMount\config.json`。若该文件损坏，程序会将其备份为 `config.json.bad` 并要求重新登录。
 
 ## 构建 EXE
+
+在 PowerShell 中于项目根目录执行：
 
 ```powershell
 pip install pyinstaller
 .\build.ps1
 ```
 
-构建产物位于：
+产物位于 `dist\mcloudmount.exe`（已包含网页面板资源）。
 
-```text
-dist\mcloudmount.exe
-```
-
-也可以直接运行：
-
-```powershell
-dist\mcloudmount.exe login --phone 13800000000
-dist\mcloudmount.exe mount
-```
+也可以不在本机构建：推送到 GitHub 后，Actions 中的 `build` 工作流会在 Windows 环境运行测试并构建，
+在运行页面下载 `mcloudmount-exe` 即可。
 
 ## 测试
 

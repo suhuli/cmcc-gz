@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mCloudMount 控制面板</title>
+<style>
+  :root {
+    --bg: #f4f6fb; --card: #ffffff; --text: #1d2433; --muted: #6b7388;
+    --line: #e5e9f2; --brand: #2f6bff; --brand-2: #6aa2ff;
+    --ok: #17a673; --warn: #e7a100; --err: #e5484d; --idle: #9aa3b5;
+    --shadow: 0 6px 24px rgba(20, 30, 60, .07);
+    --radius: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1420; --card: #171e2e; --text: #e8ecf5; --muted: #8e98ad;
+      --line: #252f45; --shadow: 0 6px 24px rgba(0, 0, 0, .35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 600px at 10% -10%, rgba(47,107,255,.10), transparent 60%), var(--bg);
+    color: var(--text); min-height: 100vh; padding: 28px 16px 48px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 18px;
+    box-shadow: 0 8px 20px rgba(47,107,255,.35);
+  }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+    background: var(--card); box-shadow: var(--shadow); font-size: 14px; font-weight: 600;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--idle); }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 0 4px rgba(23,166,115,.18); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 0 4px rgba(231,161,0,.18); }
+  .dot.err { background: var(--err); box-shadow: 0 0 0 4px rgba(229,72,77,.18); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .stat { background: var(--card); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+  .stat .label { color: var(--muted); font-size: 12.5px; }
+  .stat .value { font-size: 18px; font-weight: 700; margin-top: 6px; word-break: break-all; }
+  .stat .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+  .panel { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--line); padding: 20px; margin-bottom: 18px; }
+  .panel h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+  .big-btn {
+    flex: 1 1 260px; border: 0; cursor: pointer; border-radius: 14px; padding: 18px 20px;
+    font-size: 17px; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    box-shadow: 0 10px 24px rgba(47,107,255,.30); transition: transform .08s ease, opacity .2s;
+  }
+  .big-btn:hover { transform: translateY(-1px); }
+  .big-btn:active { transform: translateY(0); }
+  .big-btn.stop { background: linear-gradient(135deg, #ef6b6f, var(--err)); box-shadow: 0 10px 24px rgba(229,72,77,.28); }
+  .big-btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+  .ghost {
+    border: 1px solid var(--line); background: transparent; color: var(--text); padding: 10px 14px;
+    border-radius: 10px; cursor: pointer; font-size: 14px;
+  }
+  .ghost:hover { border-color: var(--brand); color: var(--brand); }
+  .ghost.danger:hover { border-color: var(--err); color: var(--err); }
+  .ghost:disabled { opacity: .5; cursor: not-allowed; }
+
+  .field { display: flex; flex-direction: column; gap: 6px; flex: 1 1 200px; }
+  .field label { font-size: 13px; color: var(--muted); }
+  input {
+    font: inherit; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line);
+    background: transparent; color: var(--text); outline: none; min-width: 0;
+  }
+  input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(47,107,255,.15); }
+  .primary {
+    border: 0; background: var(--brand); color: #fff; padding: 12px 18px; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  .primary:disabled { opacity: .5; cursor: not-allowed; }
+  .muted { color: var(--muted); font-size: 13px; }
+
+  .logs {
+    background: #0c111b; color: #c6cfdf; border-radius: 12px; padding: 12px 14px; height: 240px; overflow: auto;
+    font: 12.5px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap;
+  }
+  .logs .lv-ERROR { color: #ff8b8e; }
+  .logs .lv-WARNING { color: #ffd166; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--bg); padding: 12px 18px; border-radius: 12px; font-size: 14px;
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: .25s ease; max-width: 90vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: var(--err); color: #fff; }
+  .hidden { display: none !important; }
+  .spinner {
+    width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+    display: inline-block; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 560px) { h1 { font-size: 18px; } .big-btn { font-size: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">M</div>
+      <div>
+        <h1>mCloudMount</h1>
+        <div class="sub">把移动云盘挂载为本地磁盘</div>
+      </div>
+    </div>
+    <div class="pill" id="pill"><span class="dot" id="pillDot"></span><span id="pillText">读取中…</span></div>
+  </header>
+
+  <section class="grid">
+    <div class="stat">
+      <div class="label">登录账号</div>
+      <div class="value" id="sAccount">—</div>
+      <div class="hint" id="sAccountHint"></div>
+    </div>
+    <div class="stat">
+      <div class="label">登录状态</div>
+      <div class="value" id="sToken">—</div>
+      <div class="hint" id="sTokenHint"></div>
+    </div>
+    <div class="stat">
+      <div class="label">盘符</div>
+      <div class="value" id="sDrive">—</div>
+      <div class="hint" id="sDriveHint"></div>
+    </div>
+    <div class="stat">
+      <div class="label">本地 WebDAV</div>
+      <div class="value" id="sWebdav">—</div>
+      <div class="hint" id="sWebdavHint"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="mountPanel">
+    <h2>挂载控制</h2>
+    <div class="row">
+      <button class="big-btn" id="mainBtn" disabled>读取中…</button>
+    </div>
+    <p class="muted" id="mountMsg" style="margin:12px 2px 0"></p>
+  </section>
+
+  <section class="panel hidden" id="loginPanel">
+    <h2>手机号登录 <span class="muted" style="font-weight:400">验证码会发送到你的手机</span></h2>
+    <div class="row" id="stepPhone">
+      <div class="field">
+        <label for="phone">手机号</label>
+        <input id="phone" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel">
+      </div>
+      <button class="primary" id="sendBtn">获取验证码</button>
+    </div>
+    <div class="row hidden" id="stepCode" style="margin-top:12px">
+      <div class="field">
+        <label for="code">短信验证码</label>
+        <input id="code" inputmode="numeric" maxlength="8" placeholder="收到的验证码" autocomplete="one-time-code">
+      </div>
+      <button class="primary" id="loginBtn">登录</button>
+      <button class="ghost" id="resendBtn" disabled>重新发送</button>
+    </div>
+  </section>
+
+  <section class="panel hidden" id="accountPanel">
+    <h2>账号</h2>
+    <div class="row">
+      <button class="ghost danger" id="logoutBtn">退出登录</button>
+      <span class="muted">退出会先卸载盘符，并清除本机保存的登录信息。</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>运行日志 <button class="ghost" id="logToggle" style="padding:4px 10px">收起</button></h2>
+    <div class="logs" id="logs"></div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { status: null, busy: false, countdown: 0, timer: null };
+
+  function toast(text, isErr) {
+    const t = $('toast');
+    t.textContent = text;
+    t.classList.toggle('err', !!isErr);
+    t.classList.add('show');
+    clearTimeout(toast._h);
+    toast._h = setTimeout(() => t.classList.remove('show'), 3200);
+  }
+
+  async function api(path, body) {
+    const opts = { method: body === undefined ? 'GET' : 'POST', headers: {} };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.headers['X-MCM'] = '1';
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(path, opts);
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error(data.error || ('请求失败 ' + res.status));
+    return data;
+  }
+
+  function setPill(kind, text) {
+    $('pillDot').className = 'dot ' + kind;
+    $('pillText').textContent = text;
+  }
+
+  function render(s) {
+    state.status = s;
+    // 账号
+    $('sAccount').textContent = s.logged_in ? s.account : '未登录';
+    $('sAccountHint').textContent = s.logged_in ? '已保存在本机' : '请先用手机号登录';
+    // 登录/令牌
+    if (!s.logged_in) {
+      $('sToken').textContent = '—';
+      $('sTokenHint').textContent = '';
+    } else if (s.token_expired) {
+      $('sToken').textContent = '已过期';
+      $('sTokenHint').textContent = '请重新登录';
+    } else {
+      $('sToken').textContent = '有效';
+      $('sTokenHint').textContent = '';
+    }
+    // 盘符
+    $('sDrive').textContent = s.drive || '未设置';
+    $('sDriveHint').textContent = s.mounted ? '已挂载，可在资源管理器中打开' : '未挂载';
+    // WebDAV
+    $('sWebdav').textContent = s.server_running ? '运行中' : '未运行';
+    $('sWebdavHint').textContent = s.webdav;
+
+    // 顶部状态
+    let kind = 'idle', text = '未挂载';
+    if (s.phase === 'starting' || s.phase === 'stopping') { kind = 'warn'; text = s.message || '处理中…'; }
+    else if (s.phase === 'error') { kind = 'err'; text = '出错'; }
+    else if (s.mounted) { kind = 'ok'; text = '已挂载 ' + s.drive; }
+    else if (!s.logged_in) { kind = 'idle'; text = '未登录'; }
+    setPill(kind, text);
+
+    // 主按钮
+    const btn = $('mainBtn');
+    const busy = s.phase === 'starting' || s.phase === 'stopping';
+    if (busy) {
+      btn.disabled = true;
+      btn.classList.remove('stop');
+      btn.innerHTML = '<span class="spinner"></span>' + (s.message || '处理中…');
+    } else if (s.mounted) {
+      btn.disabled = false;
+      btn.classList.add('stop');
+      btn.textContent = '卸载盘符';
+    } else {
+      btn.classList.remove('stop');
+      btn.innerHTML = '挂载到 ' + (s.drive || 'Z:');
+      btn.disabled = !s.logged_in || s.token_expired;
+    }
+    $('mountMsg').textContent =
+      s.phase === 'error' ? ('错误：' + s.error) :
+      (!s.logged_in ? '先在下方登录你的手机号，然后即可挂载。' :
+      (s.token_expired ? '登录已过期，请重新登录。' :
+      (s.mounted ? '已挂载。如需退出请点击上方按钮。' : '点击上方按钮挂载云盘。')));
+
+    // 面板显隐
+    $('loginPanel').classList.toggle('hidden', s.logged_in && !s.token_expired);
+    $('accountPanel').classList.toggle('hidden', !s.logged_in);
+    if (s.pending_phone && !$('phone').value) $('phone').value = s.pending_phone;
+  }
+
+  async function refresh() {
+    try { render(await api('/api/status')); }
+    catch (e) { setPill('err', '面板连接失败'); }
+  }
+
+  async function refreshLogs() {
+    try {
+      const { lines } = await api('/api/logs');
+      const box = $('logs');
+      const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+      box.innerHTML = '';
+      for (const line of lines) {
+        const div = document.createElement('div');
+        const m = line.match(/\s(ERROR|WARNING|INFO)\s/);
+        if (m) div.className = 'lv-' + m[1];
+        div.textContent = line;
+        box.appendChild(div);
+      }
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    } catch (_) {}
+  }
+
+  async function act(fn, okMsg) {
+    if (state.busy) return;
+    state.busy = true;
+    try {
+      const r = await fn();
+      if (okMsg) toast(okMsg);
+      return r;
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      state.busy = false;
+      refresh();
+    }
+  }
+
+  $('mainBtn').addEventListener('click', () => {
+    const s = state.status || {};
+    if (s.mounted) act(() => api('/api/unmount', {}), '已卸载');
+    else act(() => api('/api/mount', {}), '开始挂载…');
+  });
+
+  function startCountdown() {
+    state.countdown = 60;
+    $('resendBtn').disabled = true;
+    clearInterval(state.timer);
+    state.timer = setInterval(() => {
+      state.countdown -= 1;
+      if (state.countdown <= 0) {
+        clearInterval(state.timer);
+        $('resendBtn').disabled = false;
+        $('resendBtn').textContent = '重新发送';
+      } else {
+        $('resendBtn').textContent = state.countdown + ' 秒后重发';
+      }
+    }, 1000);
+  }
+
+  async function sendCode() {
+    const phone = $('phone').value.trim();
+    if (!/^1\d{10}$/.test(phone)) { toast('请输入 11 位手机号', true); return; }
+    const r = await act(() => api('/api/login/send', { phone }), '验证码已发送');
+    if (r) {
+      $('stepCode').classList.remove('hidden');
+      $('code').focus();
+      startCountdown();
+    }
+  }
+
+  $('sendBtn').addEventListener('click', sendCode);
+  $('resendBtn').addEventListener('click', sendCode);
+  $('loginBtn').addEventListener('click', () => {
+    const phone = $('phone').value.trim();
+    const code = $('code').value.trim();
+    if (!code) { toast('请输入验证码', true); return; }
+    act(async () => {
+      $('loginBtn').disabled = true;
+      try { await api('/api/login/verify', { phone, code }); }
+      finally { $('loginBtn').disabled = false; }
+      $('code').value = '';
+      $('stepCode').classList.add('hidden');
+      toast('登录成功');
+    });
+  });
+  $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loginBtn').click(); });
+  $('phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCode(); });
+
+  $('logoutBtn').addEventListener('click', () => {
+    if (!confirm('确定退出登录？盘符会先被卸载。')) return;
+    act(() => api('/api/logout', {}), '已退出登录');
+  });
+
+  $('logToggle').addEventListener('click', () => {
+    const box = $('logs');
+    const hidden = box.classList.toggle('hidden');
+    $('logToggle').textContent = hidden ? '展开' : '收起';
+  });
+
+  refresh();
+  refreshLogs();
+  setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+  setInterval(() => { if (!document.hidden) refreshLogs(); }, 2000);
+})();
+</script>
+</body>
+</html>

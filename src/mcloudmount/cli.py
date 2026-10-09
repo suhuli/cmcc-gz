@@ -12,9 +12,9 @@ import time
 
 from .api import MCloudClient
 from .config import Config
-from .davserver import DavServer
 from .errors import AuthError, MCloudError
-from .winutil import ensure_webclient, mount, mount_status, set_webclient_limits, umount, wait_mount
+from .service import MountError, MountService
+from .winutil import mount_status, umount
 
 log = logging.getLogger("mcloudmount")
 
@@ -101,42 +101,21 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_mount(args: argparse.Namespace) -> int:
     cfg = Config.load()
-    if not cfg.account.phone or not cfg.account.token:
-        print("请先执行 login")
-        return 1
-    if _token_expired(cfg):
-        print("令牌已过期，请重新执行 login")
-        return 1
     _configure_logging(cfg.log_level)
-    if not ensure_webclient():
-        log.warning("WebClient 服务未能启动，挂载可能失败")
-    set_webclient_limits()
-    client = _make_client(cfg)
-    print("正在验证登录状态...")
-    client.resolve_connection()
-    drive = cfg.mount.drive
-    if drive and mount_status(drive):
-        umount(drive)
-    server = DavServer(client, cfg.mount.host, cfg.mount.port, cfg.mount.dav_user, cfg.mount.dav_password)
-    if not server.start_background():
-        print(f"WebDAV 服务启动失败，端口 {cfg.mount.port} 可能被占用")
+    svc = MountService(cfg)
+    try:
+        svc.start()
+    except MountError as exc:
+        print(exc.message)
         return 1
+    print(svc.state.message)
 
     stop = threading.Event()
-    cleaned = threading.Event()
-
-    def _cleanup() -> None:
-        if cleaned.is_set():
-            return
-        cleaned.set()
-        if drive:
-            umount(drive)
-        server.stop()
 
     def _on_signal(signum, frame) -> None:  # noqa: ARG001
         stop.set()
 
-    atexit.register(_cleanup)
+    atexit.register(svc.stop)
     for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         sig = getattr(signal, name, None)
         if sig is not None:
@@ -145,23 +124,22 @@ def cmd_mount(args: argparse.Namespace) -> int:
             except (ValueError, OSError):
                 pass
 
-    if drive:
-        if not mount(drive, cfg.mount.host, cfg.mount.port, cfg.mount.dav_user, cfg.mount.dav_password) \
-                or not wait_mount(drive):
-            print("挂载失败，请检查 WebClient 服务和端口")
-            _cleanup()
-            return 1
-        print(f"已挂载到 {drive}")
-
     try:
         while not stop.wait(5):
-            if not server.is_running():
-                log.error("WebDAV 服务意外退出")
+            svc.check_health()
+            if svc.state.phase == "error":
+                log.error(svc.state.error)
                 return 1
     finally:
         print("正在卸载...")
-        _cleanup()
+        svc.stop()
     return 0
+
+
+def cmd_panel(args: argparse.Namespace) -> int:
+    from .panel import DEFAULT_PANEL_PORT, serve
+
+    return serve(port=args.port or DEFAULT_PANEL_PORT, open_browser=not args.no_browser)
 
 
 def cmd_umount(args: argparse.Namespace) -> int:
@@ -175,7 +153,8 @@ def cmd_umount(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mcloudmount")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.set_defaults(func=cmd_panel, port=None, no_browser=False)
+    sub = parser.add_subparsers(dest="command")
 
     p_login = sub.add_parser("login", help="手机号 + 短信验证码登录")
     p_login.add_argument("--phone", help="手机号")
@@ -193,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_umount = sub.add_parser("umount", help="卸载盘符")
     p_umount.set_defaults(func=cmd_umount)
+
+    p_panel = sub.add_parser("panel", help="打开网页控制面板（默认）")
+    p_panel.add_argument("--port", type=int, default=None, help="面板端口，默认 8390")
+    p_panel.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    p_panel.set_defaults(func=cmd_panel)
     return parser
 
 
