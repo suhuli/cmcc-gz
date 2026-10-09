@@ -89,3 +89,70 @@ def test_static_path_traversal_blocked(panel_url):
 def test_logs_endpoint(panel_url):
     data = requests.get(panel_url + "/api/logs", timeout=5).json()
     assert isinstance(data["lines"], list)
+
+
+def test_run_command_timeout_returns_failure():
+    from mcloudmount.winutil import _run
+
+    result = _run(["python3", "-c", "import time; time.sleep(5)"], timeout=0.5)
+    assert result.returncode == 124
+    assert "超时" in result.stderr
+
+
+def test_stop_always_leaves_stopping_state(monkeypatch, tmp_path):
+    import mcloudmount.service as svc
+    from mcloudmount.config import Config
+    from mcloudmount.service import MountService
+
+    monkeypatch.setenv("MCLOUDMOUNT_HOME", str(tmp_path))
+    cfg = Config()
+    cfg.mount.drive = "Z:"
+    service = MountService(cfg)
+    monkeypatch.setattr(svc, "mount_status", lambda d: True)
+
+    def boom(drive):
+        raise OSError("net use crashed")
+
+    monkeypatch.setattr(svc, "umount", boom)
+    service.stop()
+    assert service.state.phase != "stopping"
+    assert "卸载盘符时出错" in service.state.error
+
+
+def test_stop_keeps_server_when_drive_still_mounted(monkeypatch, tmp_path):
+    import mcloudmount.service as svc
+    from mcloudmount.config import Config
+    from mcloudmount.service import MountService
+
+    monkeypatch.setenv("MCLOUDMOUNT_HOME", str(tmp_path))
+    cfg = Config()
+    cfg.mount.drive = "Z:"
+    service = MountService(cfg)
+    stopped = []
+
+    class FakeServer:
+        def stop(self):
+            stopped.append(True)
+
+    service._server = FakeServer()
+    monkeypatch.setattr(svc, "mount_status", lambda d: True)
+    monkeypatch.setattr(svc, "umount", lambda d: False)
+    service.stop()
+    assert stopped == []                       # 盘符仍在，不能关掉服务
+    assert service.state.phase == "mounted"
+    assert "未能卸载" in service.state.error
+
+
+def test_stop_success_goes_idle(monkeypatch, tmp_path):
+    import mcloudmount.service as svc
+    from mcloudmount.config import Config
+    from mcloudmount.service import MountService
+
+    monkeypatch.setenv("MCLOUDMOUNT_HOME", str(tmp_path))
+    cfg = Config()
+    cfg.mount.drive = "Z:"
+    service = MountService(cfg)
+    monkeypatch.setattr(svc, "mount_status", lambda d: False)
+    service.stop()
+    assert service.state.phase == "idle"
+    assert service.state.error == ""

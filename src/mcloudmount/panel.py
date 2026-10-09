@@ -130,13 +130,22 @@ class Panel:
         return {"started": True}
 
     def stop_mount(self) -> dict[str, Any]:
+        """卸载在后台线程执行：请求立即返回，界面通过 status 轮询进度。"""
         if not self._busy.acquire(blocking=False):
             raise MCloudError("正在处理上一个操作，请稍候")
-        try:
-            self.service.stop()
-        finally:
-            self._busy.release()
-        return {"stopped": True}
+
+        def _run() -> None:
+            try:
+                self.service.stop()
+            except Exception as exc:  # noqa: BLE001
+                log.exception("卸载失败")
+                self.service._set("mounted" if self.service.drive_mounted() else "error",  # noqa: SLF001
+                                  error=f"卸载失败：{exc}")
+            finally:
+                self._busy.release()
+
+        threading.Thread(target=_run, name="mcm-unmount", daemon=True).start()
+        return {"stopping": True}
 
     def toggle_mount(self) -> None:
         if self.service.state.phase == "mounted":

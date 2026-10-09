@@ -143,15 +143,37 @@ class MountService:
                 raise MountError(exc.message) from exc
 
     def stop(self) -> None:
+        """卸载盘符并停止 WebDAV 服务。
+
+        无论中途是否出错，最终状态都会离开 stopping：
+        - 卸载成功：idle。
+        - 盘符仍然存在：保持 mounted（WebDAV 服务不关闭，盘符仍可用），并给出错误提示，
+          用户关闭占用程序后可以再次卸载。
+        """
         with self._lock:
             self._set("stopping", "正在卸载")
             drive = self.cfg.mount.drive
-            if drive:
-                umount(drive)
-            if self._server is not None:
-                self._server.stop()
-            self._server = None
-            self._client = None
+            error = ""
+            try:
+                if drive and mount_status(drive):
+                    if not umount(drive):
+                        error = f"盘符 {drive} 未能卸载，可能有程序正在使用它。关闭相关窗口后重试。"
+            except Exception as exc:  # noqa: BLE001
+                log.exception("卸载盘符时出错")
+                error = f"卸载盘符时出错：{exc}"
+            if error:
+                # 盘符还在：保留服务，状态回到 mounted，错误信息单独展示
+                self._set("mounted", f"已挂载到 {drive}", error=error)
+                log.warning(error)
+                return
+            try:
+                if self._server is not None:
+                    self._server.stop()
+            except Exception:  # noqa: BLE001
+                log.exception("停止 WebDAV 服务时出错")
+            finally:
+                self._server = None
+                self._client = None
             self._set("idle", "已卸载")
 
     def check_health(self) -> None:

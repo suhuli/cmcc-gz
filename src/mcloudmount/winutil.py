@@ -6,16 +6,19 @@ import re
 import subprocess
 import time
 
-def _run(cmd: list[str], *, check: bool = False) -> subprocess.CompletedProcess:
-    """执行系统命令；命令不存在（如非 Windows 环境）时返回失败结果而不是抛异常。"""
+def _run(cmd: list[str], *, check: bool = False, timeout: float = 20.0) -> subprocess.CompletedProcess:
+    """执行系统命令。命令不存在时返回失败结果；超时也返回失败结果，避免界面永久卡住。"""
     try:
         return subprocess.run(
             cmd,
             check=check,
             capture_output=True,
             text=True,
+            timeout=timeout,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, stdout="", stderr=f"命令超时（{timeout:.0f} 秒）")
     except OSError as exc:
         return subprocess.CompletedProcess(cmd, 127, stdout="", stderr=str(exc))
 
@@ -89,8 +92,18 @@ def mount(drive: str, host: str, port: int, user: str, password: str) -> bool:
 
 
 def umount(drive: str) -> bool:
-    result = _run(["net", "use", f"{drive}", "/delete", "/yes"])
-    return result.returncode == 0
+    """卸载盘符。返回 True 表示盘符已经不存在。
+
+    失败后等待 1 秒重试一次（盘符刚被使用时常常第二次就成功）；
+    最终以 `net use` 列表为准判断，而不是只看返回码。
+    """
+    cmd = ["net", "use", f"{drive}", "/delete", "/yes"]
+    _run(cmd)
+    if not mount_status(drive):
+        return True
+    time.sleep(1.0)
+    _run(cmd)
+    return not mount_status(drive)
 
 
 def mount_status(drive: str) -> bool:
