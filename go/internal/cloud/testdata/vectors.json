@@ -1,0 +1,72 @@
+{
+  "sign": [
+    {
+      "body": "{\"parentFileId\":\"/\",\"parentFilePath\":false,\"pageInfo\":{\"pageSize\":200,\"pageCursor\":\"\",\"needTotalCount\":0}}",
+      "timestamp": "20261009 120000",
+      "nonce": "NONCE0000000000",
+      "encoded": "%7B%22parentFileId%22%3A%22%2F%22%2C%22parentFilePath%22%3Afalse%2C%22pageInfo%22%3A%7B%22pageSize%22%3A200%2C%22pageCursor%22%3A%22%22%2C%22needTotalCount%22%3A0%7D%7D",
+      "signature": "14BB7D5A69B6B9E0FDD349690FCA2516"
+    },
+    {
+      "body": "{\"name\":\"报告 final (v2).docx\",\"x\":\"a!b'c(d)e*f~g_h.i-j\"}",
+      "timestamp": "20261009 120100",
+      "nonce": "NONCE0000000001",
+      "encoded": "%7B%22name%22%3A%22%E6%8A%A5%E5%91%8A%20final%20(v2).docx%22%2C%22x%22%3A%22a!b'c(d)e%2Af~g_h.i-j%22%7D",
+      "signature": "A45F7584ECA5DDB15944E5211290989C"
+    },
+    {
+      "body": "{\"fileId\":\"abc123\",\"name\":\"<tag>&\\\"quote\\\"\\\\\"}",
+      "timestamp": "20261009 120200",
+      "nonce": "NONCE0000000002",
+      "encoded": "%7B%22fileId%22%3A%22abc123%22%2C%22name%22%3A%22%3Ctag%3E%26%5C%22quote%5C%22%5C%5C%22%7D",
+      "signature": "C21A02D28B06737CC9E04FD31DF4BEAF"
+    },
+    {
+      "body": "{\"k\":\"中文路径/子目录/文件 名称.txt\"}",
+      "timestamp": "20261009 120300",
+      "nonce": "NONCE0000000003",
+      "encoded": "%7B%22k%22%3A%22%E4%B8%AD%E6%96%87%E8%B7%AF%E5%BE%84%2F%E5%AD%90%E7%9B%AE%E5%BD%95%2F%E6%96%87%E4%BB%B6%20%E5%90%8D%E7%A7%B0.txt%22%7D",
+      "signature": "48086C818C7D573107529896FD8236A2"
+    },
+    {
+      "body": "{}",
+      "timestamp": "20261009 120400",
+      "nonce": "NONCE0000000004",
+      "encoded": "%7B%7D",
+      "signature": "60F2C9D4F764DD1B1F3C2F31CF7648D0"
+    }
+  ],
+  "transport": [
+    {
+      "clear": "{\"parentFileId\":\"/\",\"parentFilePath\":false,\"pageInfo\":{\"pageSize\":200,\"pageCursor\":\"\",\"needTotalCount\":0}}",
+      "iv_hex": "000102030405060708090a0b0c0d0e0f",
+      "wire": "AAECAwQFBgcICQoLDA0OD2yKtvDY/Hx6Yl9cGKRrX6hIm6KftrBQhPoHMCw86KJmwl5mPmgTOdGx+HV4Lj+qJGZfyZt6ecbZY+mVyzm4E3c8bHToME3PdN5WQ01pC9lgmBKnWOQar7MpvAXXN48HqSp7SdyK3ixuwfbPOlbb1VY="
+    },
+    {
+      "clear": "{\"name\":\"报告 final (v2).docx\",\"x\":\"a!b'c(d)e*f~g_h.i-j\"}",
+      "iv_hex": "000102030405060708090a0b0c0d0e0f",
+      "wire": "AAECAwQFBgcICQoLDA0OD83dE89WRp9Na71FZhjO0wvQN2PZVkJOyPY0trkTJNEpi10c2Qb+j2KBtH5I89rax4CgbBMISUOenaVIW6OfNis="
+    },
+    {
+      "clear": "{\"fileId\":\"abc123\",\"name\":\"<tag>&\\\"quote\\\"\\\\\"}",
+      "iv_hex": "000102030405060708090a0b0c0d0e0f",
+      "wire": "AAECAwQFBgcICQoLDA0OD+/6dvCt35HaASRC/RbnJqnBCqyfd9pE9JD5adz7tfD+V7rnSev5oztjJSgWviz4TQ=="
+    }
+  ],
+  "login_data": {
+    "plain": "{\"authToken\":\"tok123\",\"account\":\"17671400063\",\"return\":\"0\"}",
+    "hex": "46df91a5c7408f2d37d50cde717826109002ff9a27fcd3aba93ffe54bd4c77c87a39227fab984441dce3069795a96b7a5331c5b423687566ee24b822fcc7c7ea"
+  },
+  "basic_auth": {
+    "kind": "pc",
+    "account": "17671400063",
+    "token": "tok123",
+    "expect": "Basic cGM6MTc2NzE0MDAwNjM6dG9rMTIz"
+  },
+  "device_info": {
+    "expect": "||9|7.17.9|mobile|Android|web-0063||Android 14||zh-CN|||"
+  },
+  "client_info": {
+    "expect": "||9|7.17.9|mobile|Android|web-0063||Android 14||zh-CN|||bW9iaWxl||"
+  }
+}
