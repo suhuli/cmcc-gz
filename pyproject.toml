@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcloudmount"
+version = "0.1.0"
+description = "Mount China Mobile Cloud Drive as a local drive"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31",
+  "pycryptodome>=3.20",
+  "wsgidav>=4.3",
+  "cheroot>=10.0",
+  "defusedxml>=0.7",
+]
+
+[project.scripts]
+mcloudmount = "mcloudmount.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
