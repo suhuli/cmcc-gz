@@ -2,23 +2,36 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 
 def _run(cmd: list[str], *, check: bool = False) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        cmd,
-        check=check,
-        capture_output=True,
-        text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    """执行系统命令；命令不存在（如非 Windows 环境）时返回失败结果而不是抛异常。"""
+    try:
+        return subprocess.run(
+            cmd,
+            check=check,
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        return subprocess.CompletedProcess(cmd, 127, stdout="", stderr=str(exc))
+
+
+_RUNNING_STATE = re.compile(r"(STATE|状态)\s*:\s*4\b", re.IGNORECASE)
+
+
+def webclient_running() -> bool:
+    """用数字状态码 4（RUNNING）判断，兼容中文等非英文系统的 sc 输出。"""
+    state = _run(["sc", "query", "WebClient"])
+    return bool(_RUNNING_STATE.search(state.stdout)) or "RUNNING" in state.stdout.upper()
 
 
 def ensure_webclient() -> bool:
     """启动 WebClient 服务；失败返回 False，由上层提示。"""
-    state = _run(["sc", "query", "WebClient"])
-    if "RUNNING" in state.stdout:
+    if webclient_running():
         return True
     result = _run(["net", "start", "WebClient"])
     return result.returncode == 0

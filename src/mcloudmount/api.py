@@ -8,16 +8,12 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
-import random
-import string
 import time
 import uuid
 from datetime import datetime
 from typing import Any, Iterator
-from urllib.parse import quote, urljoin
-import urllib.request
+from urllib.parse import urljoin
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -32,9 +28,12 @@ from .pc_login import (
     build_login_request,
     build_sms_request,
     compact_json,
+    create_signature,
     decrypt_login_data,
     decrypt_transport,
+    format_timestamp,
     prepare_request,
+    random_nonce,
 )
 from .transport import default_http_headers
 
@@ -48,28 +47,6 @@ WEB_VERSION = "7.17.9"
 WEB_CHANNEL = "10000034"
 
 
-def _md5_hex(value: str) -> str:
-    return hashlib.md5(value.encode("utf-8")).hexdigest()
-
-
-def _encode_uri_component(value: str) -> str:
-    encoded = quote(value, safe="")
-    for old, new in {
-        "+": "%20", "%21": "!", "%27": "'", "%28": "(",
-        "%29": ")", "%7E": "~",
-    }.items():
-        encoded = encoded.replace(old, new)
-    return encoded
-
-
-def create_signature(clear_body: str, timestamp: str, nonce: str) -> str:
-    sorted_chars = "".join(sorted(_encode_uri_component(clear_body)))
-    encoded_base64 = base64.b64encode(sorted_chars.encode("utf-8")).decode("ascii")
-    a = _md5_hex(encoded_base64).lower()
-    b = _md5_hex(f"{timestamp}:{nonce}").lower()
-    return _md5_hex(a + b).upper()
-
-
 def _web_device_info(device_id: str = "mcloudmount") -> str:
     return f"||9|{WEB_VERSION}|mobile|Android|{device_id}||Android 14||zh-CN|||"
 
@@ -79,8 +56,8 @@ def _web_client_info(device_id: str = "mcloudmount") -> str:
 
 
 def _signed_header(clear_body: str) -> str:
-    timestamp = datetime.now().strftime("%Y%m%d %H%M%S")
-    nonce = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(16))
+    timestamp = format_timestamp()
+    nonce = random_nonce()
     return f"{timestamp},{nonce},{create_signature(clear_body, timestamp, nonce)}"
 
 
@@ -492,6 +469,7 @@ class MCloudClient:
         return data
 
     def upload_part(self, upload_url: str, data: Any, length: int | None = None, *, timeout: float = 180.0):
+        """PUT 一个分片。走统一 session，复用连接并享有重试（PUT 已在 Retry 白名单内）。"""
         if hasattr(data, "read"):
             chunks = []
             remaining = length
@@ -504,16 +482,14 @@ class MCloudClient:
                 if remaining is not None:
                     remaining -= len(chunk)
             data = b"".join(chunks)
-        headers = {"Content-Length": str(len(data))}
-        request = urllib.request.Request(upload_url, data=data, method="PUT", headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                result = requests.Response()
-                result.status_code = response.status
-                result.headers = {k.lower(): v for k, v in response.headers.items()}
-                result._content = b""
-                return result
-        except Exception as exc:
+            return self.session.put(
+                upload_url,
+                data=data,
+                headers={"Content-Length": str(len(data))},
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
             raise NetworkError(f"上传分片失败: {exc}") from exc
 
     def complete_upload(
@@ -616,6 +592,7 @@ class MCloudClient:
             return self.session.get(url, headers=headers, stream=True, timeout=timeout, allow_redirects=True)
         except requests.RequestException as exc:
             raise NetworkError(f"下载失败: {exc}") from exc
+
     def upload_create(
         self,
         parent_file_id: str,

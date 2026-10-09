@@ -7,11 +7,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 def config_dir() -> Path:
@@ -67,7 +70,16 @@ class Config:
             return cls()
         try:
             raw = json.loads(path.read_text("utf-8"))
-        except (OSError, ValueError):
+            if not isinstance(raw, dict):
+                raise ValueError("config root is not an object")
+        except (OSError, ValueError) as exc:
+            # 损坏时先备份，避免之后 save() 把登录态覆盖丢失
+            backup = path.with_name(path.name + ".bad")
+            try:
+                os.replace(path, backup)
+            except OSError:
+                backup = None
+            log.warning("配置文件损坏（%s），已备份到 %s，请重新登录", exc, backup or path)
             return cls()
         cfg = cls()
         acct = raw.get("account") or {}

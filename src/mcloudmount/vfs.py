@@ -1,17 +1,25 @@
-"""路径 -> fileId 解析与目录条目缓存。"""
+"""路径 -> fileId 解析与目录条目缓存。
+
+缓存结构：每个目录一份 DirCache，内含
+- entries：精确名字 -> Entry（O(1) 查找）
+- folded：casefold 名字 -> Entry（Windows 不区分大小写时的回退索引）
+"""
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .api import MCloudClient
 
+log = logging.getLogger(__name__)
+
 ROOT_FILE_ID = "/"
 DIR_TTL = 15.0
-NEGATIVE_TTL = 3.0
 
 
 @dataclass
@@ -30,17 +38,34 @@ class Entry:
 class DirCache:
     fetched_at: float
     entries: dict[str, Entry] = field(default_factory=dict)
+    folded: dict[str, Entry] = field(default_factory=dict)
+
+    def add(self, entry: Entry) -> None:
+        self.entries[entry.name] = entry
+        self.folded[entry.name.casefold()] = entry
+
+    def remove(self, name: str) -> None:
+        entry = self.entries.pop(name, None)
+        if entry is not None:
+            self.folded.pop(name.casefold(), None)
+
+    def lookup(self, name: str) -> Entry | None:
+        hit = self.entries.get(name)
+        if hit is not None:
+            return hit
+        return self.folded.get(name.casefold())
 
 
 class Vfs:
     """把 WebDAV 路径映射为 fileId，并缓存目录页。"""
 
-    def __init__(self, client: MCloudClient):
+    def __init__(self, client: MCloudClient, ttl: float = DIR_TTL):
         self.client = client
+        self.ttl = ttl
         self._lock = threading.RLock()
         self._dir_cache: dict[str, DirCache] = {}
-        self._root_path = "/"
 
+    # ------------------------------------------------------------ 缓存管理
     def invalidate(self, parent_file_id: str | None = None) -> None:
         with self._lock:
             if parent_file_id is None:
@@ -48,9 +73,21 @@ class Vfs:
             else:
                 self._dir_cache.pop(parent_file_id, None)
 
+    def remember(self, entry: Entry) -> None:
+        """写操作成功后增量写入缓存，避免整目录重新拉取。"""
+        with self._lock:
+            cache = self._dir_cache.get(entry.parent_file_id)
+            if cache is not None and entry.name:
+                cache.add(entry)
+
+    def forget(self, parent_file_id: str, name: str) -> None:
+        with self._lock:
+            cache = self._dir_cache.get(parent_file_id)
+            if cache is not None:
+                cache.remove(name)
+
     def _fetch_children(self, parent_file_id: str) -> DirCache:
-        now = time.time()
-        cache = DirCache(now, {})
+        cache = DirCache(time.time())
         for item in self.client.iter_folder_items(parent_file_id):
             entry = Entry(
                 name=str(item.get("name") or ""),
@@ -63,28 +100,34 @@ class Vfs:
                 etag=str(item.get("contentHash") or item.get("fileId") or ""),
             )
             if entry.name and entry.file_id:
-                cache.entries[entry.name] = entry
+                cache.add(entry)
         return cache
-    def children(self, parent_file_id: str) -> list[Entry]:
+
+    def _cache_for(self, parent_file_id: str) -> DirCache:
         with self._lock:
             cached = self._dir_cache.get(parent_file_id)
-            if cached and (time.time() - cached.fetched_at) < DIR_TTL:
-                return list(cached.entries.values())
+            if cached and (time.time() - cached.fetched_at) < self.ttl:
+                return cached
         try:
             fresh = self._fetch_children(parent_file_id)
-        except Exception:
-            if cached:
-                return list(cached.entries.values())
+        except Exception as exc:
+            with self._lock:
+                stale = self._dir_cache.get(parent_file_id)
+            if stale is not None:
+                # 网络失败时退回到过期缓存，并记录，避免静默吞错
+                log.warning("目录刷新失败，使用过期缓存 %s: %s", parent_file_id, exc)
+                return stale
             raise
         with self._lock:
             self._dir_cache[parent_file_id] = fresh
-            return list(fresh.entries.values())
+        return fresh
+
+    # ------------------------------------------------------------ 查询
+    def children(self, parent_file_id: str) -> list[Entry]:
+        return list(self._cache_for(parent_file_id).entries.values())
 
     def child(self, parent_file_id: str, name: str) -> Entry | None:
-        for entry in self.children(parent_file_id):
-            if entry.name == name:
-                return entry
-        return None
+        return self._cache_for(parent_file_id).lookup(name)
 
     def entry_at(self, path: str) -> Entry | None:
         parts = self.parts(path)
@@ -100,7 +143,7 @@ class Vfs:
         return entry
 
     def parent_entry_at(self, path: str) -> tuple[str, str | None]:
-        """返回 (parent_file_id, name)。"""
+        """返回 (parent_file_id, name)。父路径不存在时 parent 为 None。"""
         parts = self.parts(path)
         if not parts:
             return ROOT_FILE_ID, None
@@ -112,7 +155,8 @@ class Vfs:
             parent_file_id = entry.file_id
         return parent_file_id, parts[-1]
 
-    def parts(self, path: str) -> list[str]:
+    @staticmethod
+    def parts(path: str) -> list[str]:
         return [part for part in path.strip("/").split("/") if part]
 
     def ensure_dir(self, parent_file_id: str, name: str) -> Entry:
@@ -129,16 +173,19 @@ class Vfs:
             parent_file_id=parent_file_id,
             is_dir=True,
         )
-        self.invalidate(parent_file_id)
+        if entry.file_id:
+            self.remember(entry)
+        else:
+            self.invalidate(parent_file_id)
         return entry
 
+    # ------------------------------------------------------------ 解析工具
     @staticmethod
     def _item_is_dir(item: dict[str, Any]) -> bool:
-        if str(item.get("type") or "").lower() == "folder":
+        kind = str(item.get("type") or "").lower()
+        if kind in ("folder", "dir"):
             return True
-        if item.get("systemDir") is True:
-            return True
-        return str(item.get("type") or "").lower() == "dir"
+        return item.get("systemDir") is True
 
     @staticmethod
     def _parse_time(value: Any) -> float | None:
@@ -150,12 +197,7 @@ class Vfs:
                 seconds /= 1000.0
             return seconds
         try:
-            from datetime import datetime
-
             text = str(value).replace("Z", "+00:00")
-            dt = datetime.fromisoformat(text)
-            if dt.tzinfo is None:
-                return dt.timestamp()
-            return dt.timestamp()
-        except Exception:
+            return datetime.fromisoformat(text).timestamp()
+        except ValueError:
             return None

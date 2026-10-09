@@ -65,6 +65,13 @@ dist\mcloudmount.exe mount
 
 ## 测试
 
+单元与端到端测试（内存云盘，不需要账号，可在任意系统运行）：
+
+```powershell
+pip install -e ".[dev]"
+pytest
+```
+
 离线 DAV 冒烟测试：
 
 ```powershell

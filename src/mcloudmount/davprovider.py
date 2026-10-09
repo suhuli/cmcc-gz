@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import tempfile
 import threading
 import time
@@ -19,17 +20,27 @@ from wsgidav.dav_error import (
 from wsgidav.dav_provider import DAVCollection, DAVNonCollection, DAVProvider
 
 from .api import MCloudClient
-from .errors import MCloudError, NotFoundError
 from .transport import default_http_headers
 from .vfs import ROOT_FILE_ID, Entry, Vfs
 
+log = logging.getLogger(__name__)
 
 UPLOAD_PART_SIZE = 8 * 1024 * 1024
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+WAIT_INTERVAL = 0.5
+
+
+def _status_error(status: int) -> DAVError:
+    """把云端 HTTP 状态映射为 WebDAV 状态，避免把 5xx 误报成 404。"""
+    if status in (404, 410):
+        return DAVError(HTTP_NOT_FOUND)
+    if status in (401, 403):
+        return DAVError(HTTP_FORBIDDEN)
+    return DAVError(HTTP_INTERNAL_ERROR)
 
 
 class _RangeStream:
-    """Read cloud files through ranged requests, seeking by reopening the URL."""
+    """通过 Range 请求读取云端文件；seek 时重新打开连接。"""
 
     def __init__(self, client: MCloudClient, file_id: str, size: int = -1):
         self.client = client
@@ -59,11 +70,23 @@ class _RangeStream:
         headers = default_http_headers()
         if self.position:
             headers["Range"] = f"bytes={self.position}-"
-        self._response = self.client.download_stream(self._url, headers=headers)
-        if self.position and self._response.status_code != 206:
+        response = self.client.download_stream(self._url, headers=headers)
+        if response.status_code >= 400:
+            response.close()
+            raise _status_error(response.status_code)
+        self._response = response
+        # 服务端忽略 Range 时会返回 200 和完整内容：读掉前 position 字节再继续
+        if self.position and response.status_code == 200:
+            skip = self.position
+            while skip > 0:
+                chunk = response.raw.read(min(skip, DOWNLOAD_CHUNK_SIZE))
+                if not chunk:
+                    self._close_response()
+                    raise DAVError(HTTP_INTERNAL_ERROR)
+                skip -= len(chunk)
+        elif self.position and response.status_code != 206:
+            self._close_response()
             raise DAVError(HTTP_INTERNAL_ERROR)
-        if self._response.status_code >= 400:
-            raise DAVError(HTTP_NOT_FOUND)
 
     def seek(self, offset: int, whence: int = 0):
         if whence == 0:
@@ -102,9 +125,9 @@ class _RangeStream:
 
 
 class _BoundedReader:
-    """File-like view over a byte range, avoiding copies of large parts."""
+    """对字节范围的只读视图，避免复制大分片。"""
 
-    def __init__(self, source: tempfile.SpooledTemporaryFile, length: int):
+    def __init__(self, source, length: int):
         self.source = source
         self.remaining = max(0, int(length))
 
@@ -120,7 +143,7 @@ class _BoundedReader:
 
 
 class _PutBuffer:
-    """Keep PUT bytes readable after WsgiDAV closes the returned stream."""
+    """WsgiDAV 关闭返回的流后，PUT 的字节仍需可读。"""
 
     def __init__(self, source: tempfile.SpooledTemporaryFile):
         self.source = source
@@ -156,8 +179,10 @@ class CloudFolder(DAVCollection):
     def delete(self):
         if self.path == "/":
             raise DAVError(HTTP_FORBIDDEN)
-        parent_file_id, _ = self.provider_impl.vfs.parent_entry_at(self.path)
+        parent_file_id, name = self.provider_impl.vfs.parent_entry_at(self.path)
         self.provider_impl.vfs.client.trash([self.file_id])
+        if parent_file_id and name:
+            self.provider_impl.vfs.forget(parent_file_id, name)
         self.provider_impl.vfs.invalidate(parent_file_id)
 
     def copy_move_single(self, dest_path: str, *, is_move: bool):
@@ -195,13 +220,7 @@ class CloudFolder(DAVCollection):
 
 
 class CloudFile(DAVNonCollection):
-    def __init__(
-        self,
-        path: str,
-        environ: dict,
-        provider: "CloudProvider",
-        entry: Entry,
-    ):
+    def __init__(self, path: str, environ: dict, provider: "CloudProvider", entry: Entry):
         super().__init__(path, environ)
         self.provider_impl = provider
         self.entry = entry
@@ -223,7 +242,8 @@ class CloudFile(DAVNonCollection):
         return bool(self.entry.file_id)
 
     def support_recursive_move(self, dest_path: str) -> bool:
-        return False
+        # 返回 True 才会走 move_recursive（服务端移动，不下载再上传）
+        return True
 
     def get_content(self):
         if not self.entry.file_id or self.entry.size == 0:
@@ -260,7 +280,7 @@ class CloudFile(DAVNonCollection):
         finally:
             buffer.source.close()
 
-    def _upload(self, source: tempfile.SpooledTemporaryFile, size: int):
+    def _upload(self, source, size: int):
         client = self.provider_impl.vfs.client
         digest = hashlib.sha256()
         while True:
@@ -279,7 +299,7 @@ class CloudFile(DAVNonCollection):
             }
             for number in range(1, part_count + 1)
         ]
-        # 服务端 v1 拒绝 overwrite；覆盖语义用临时名上传，成功后再替换旧文件。
+        # 覆盖语义：先用临时名上传，成功后再与旧文件原子替换（见 _finish_replace）
         upload_name = self._write_name
         old_file_id = self.entry.file_id
         if old_file_id:
@@ -294,56 +314,107 @@ class CloudFile(DAVNonCollection):
             part_infos=requested_parts,
         )
         node = response_data(result)
-        file_id = str(node.get("fileId") or node.get("id") or self.entry.file_id or "")
+        file_id = str(node.get("fileId") or node.get("id") or "")
         if not file_id:
             raise DAVError(HTTP_INTERNAL_ERROR)
         upload_id = str(node.get("uploadId") or "")
         transfer_token = str(node.get("transferToken") or "")
-        # file/create 命中秒传时没有 uploadId，参考项目直接完成 PUT。
-        if not upload_id:
-            self._finish_replace(file_id, old_file_id, self._write_name)
-            self.provider_impl.vfs.invalidate(self._write_target_parent)
-            return
-        planned = {int(item.get("partNumber")): item for item in (node.get("partInfos") or []) if isinstance(item, dict)}
-        for number, requested in enumerate(requested_parts, start=1):
-            part_size = int(requested["partSize"])
-            part_info = planned.get(number, {})
-            url = upload_url(part_info)
-            if not url:
-                info = client.get_upload_url(file_id, [requested], upload_id=upload_id, transfer_token=transfer_token)
-                node_info = response_data(info)
-                transfer_token = str(node_info.get("transferToken") or transfer_token)
-                part_info = pick_part_info(node_info, number)
+        # 秒传命中时没有 uploadId，文件已经存在，直接替换
+        if upload_id:
+            planned = {int(item.get("partNumber")): item for item in (node.get("partInfos") or []) if isinstance(item, dict)}
+            for number, requested in enumerate(requested_parts, start=1):
+                part_size = int(requested["partSize"])
+                part_info = planned.get(number, {})
                 url = upload_url(part_info)
-            if not url:
-                raise DAVError(HTTP_INTERNAL_ERROR)
-            resp = client.upload_part(url, _BoundedReader(source, part_size), length=part_size)
-            raise_for_upload(resp)
-        client.complete_upload(
-            file_id,
-            upload_id=upload_id,
-            transfer_token=transfer_token,
-            content_hash=content_hash,
-        )
+                if not url:
+                    info = client.get_upload_url(file_id, [requested], upload_id=upload_id, transfer_token=transfer_token)
+                    node_info = response_data(info)
+                    transfer_token = str(node_info.get("transferToken") or transfer_token)
+                    part_info = pick_part_info(node_info, number)
+                    url = upload_url(part_info)
+                if not url:
+                    raise DAVError(HTTP_INTERNAL_ERROR)
+                resp = client.upload_part(url, _BoundedReader(source, part_size), length=part_size)
+                raise_for_upload(resp)
+            client.complete_upload(
+                file_id,
+                upload_id=upload_id,
+                transfer_token=transfer_token,
+                content_hash=content_hash,
+            )
         self._finish_replace(file_id, old_file_id, self._write_name)
         self.provider_impl.vfs.invalidate(self._write_target_parent)
 
     def _finish_replace(self, new_file_id: str, old_file_id: str, name: str):
-        client = self.provider_impl.vfs.client
-        if old_file_id and new_file_id != old_file_id:
-            client.trash([old_file_id])
-            if not self.provider_impl.wait_for_absence(self._write_target_parent, name):
+        """原子替换：旧文件先改名为备份 -> 新文件改为目标名 -> 成功后删除备份。
+
+        任何一步失败都会把旧文件改回原名，并清理刚上传的临时文件，不留残留。
+        """
+        if not old_file_id or new_file_id == old_file_id:
+            return
+        provider = self.provider_impl
+        client = provider.vfs.client
+        parent = self._write_target_parent
+        backup = f"__mcm_bak_{uuid.uuid4().hex}_{name}"
+        try:
+            client.rename(old_file_id, backup)
+        except Exception:
+            self._discard(new_file_id)
+            raise
+        try:
+            provider.vfs.invalidate(parent)
+            if not provider.wait_for_absence(parent, name):
                 raise DAVError(HTTP_INTERNAL_ERROR)
             client.rename(new_file_id, name)
-            if not self.provider_impl.wait_for_entry(self._write_target_parent, name):
+            if not provider.wait_for_entry(parent, name):
                 raise DAVError(HTTP_INTERNAL_ERROR)
+        except Exception:
+            try:
+                client.rename(old_file_id, name)
+                provider.vfs.invalidate(parent)
+            except Exception as restore_exc:  # noqa: BLE001
+                log.error("替换失败且无法还原旧文件，备份保留为 %s: %s", backup, restore_exc)
+            self._discard(new_file_id)
+            raise
+        try:
+            client.trash([old_file_id])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("新文件已生效，但旧文件备份未能移入回收站（%s）: %s", backup, exc)
+        provider.vfs.invalidate(parent)
+
+    def _discard(self, file_id: str) -> None:
+        try:
+            self.provider_impl.vfs.client.trash([file_id])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("无法清理失败上传的临时文件 %s: %s", file_id, exc)
 
     def delete(self):
+        if not self.entry.file_id:
+            raise DAVError(HTTP_NOT_FOUND)
         self.provider_impl.vfs.client.trash([self.entry.file_id])
-        parent_file_id, _ = self.provider_impl.vfs.parent_entry_at(self.path)
+        parent_file_id, name = self.provider_impl.vfs.parent_entry_at(self.path)
+        if parent_file_id and name:
+            self.provider_impl.vfs.forget(parent_file_id, name)
         self.provider_impl.vfs.invalidate(parent_file_id)
 
+    def move_recursive(self, dest_path: str):
+        provider = self.provider_impl
+        dest_parent, name = provider.vfs.parent_entry_at(dest_path)
+        if not name:
+            raise DAVError(HTTP_FORBIDDEN)
+        source_parent, source_name = provider.vfs.parent_entry_at(self.path)
+        provider.vfs.client.move([self.entry.file_id], dest_parent)
+        if not provider.wait_for_entry(dest_parent, source_name):
+            raise DAVError(HTTP_INTERNAL_ERROR)
+        if name != source_name:
+            provider.vfs.client.rename(self.entry.file_id, name)
+        provider.vfs.invalidate(source_parent)
+        provider.vfs.invalidate(dest_parent)
+        if not provider.wait_for_entry(dest_parent, name):
+            raise DAVError(HTTP_INTERNAL_ERROR)
+
     def copy_move_single(self, dest_path: str, *, is_move: bool):
+        """COPY 的单文件实现：下载到临时文件再上传（服务端无复制接口时的兜底）。"""
         dest_parent, name = self.provider_impl.vfs.parent_entry_at(dest_path)
         if not name:
             raise DAVError(HTTP_FORBIDDEN)
@@ -357,6 +428,8 @@ class CloudFile(DAVNonCollection):
         temp = tempfile.SpooledTemporaryFile(max_size=UPLOAD_PART_SIZE, mode="w+b")
         try:
             with self.provider_impl.vfs.client.download_stream(url) as resp:
+                if resp.status_code >= 400:
+                    raise _status_error(resp.status_code)
                 while True:
                     chunk = resp.raw.read(DOWNLOAD_CHUNK_SIZE)
                     if not chunk:
@@ -393,7 +466,7 @@ class CloudProvider(DAVProvider):
                 consecutive_hits = 0
             if time.monotonic() >= deadline:
                 return None
-            time.sleep(0.5)
+            time.sleep(WAIT_INTERVAL)
 
     def wait_for_absence(self, parent_file_id: str, name: str, timeout: float = 15.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -408,7 +481,7 @@ class CloudProvider(DAVProvider):
                 consecutive_misses = 0
             if time.monotonic() >= deadline:
                 return False
-            time.sleep(0.5)
+            time.sleep(WAIT_INTERVAL)
 
     def get_resource_inst(self, path: str, environ: dict):
         if path in ("", "/"):
@@ -429,7 +502,7 @@ class CloudProvider(DAVProvider):
             raise DAVError(HTTP_FORBIDDEN)
         if entry:
             return entry
-        # PUT 先返回目标，等 end_write 再创建云端文件，避免 0 字节占位。
+        # PUT 先返回目标，等 end_write 再创建云端文件，避免 0 字节占位
         return Entry(name=name, file_id="", parent_file_id=parent_file_id, is_dir=False, size=0)
 
 
@@ -459,12 +532,7 @@ def upload_url(part_info: dict[str, Any]) -> str:
     return str(part_info.get("uploadUrl") or part_info.get("cdnUploadUrl") or part_info.get("url") or "")
 
 
-def etag_for_part(resp: Any, part_info: dict[str, Any]) -> str:
-    headers = getattr(resp, "headers", None) or {}
-    return str(headers.get("etag") or headers.get("ETag") or part_info.get("etag") or "")
-
-
 def raise_for_upload(resp: Any) -> None:
-    if int(getattr(resp, "status_code", 500)) >= 400:
-        raise DAVError(HTTP_INTERNAL_ERROR)
-        self._response = self.client.download_stream(self._url, headers=headers)
+    status = int(getattr(resp, "status_code", 500))
+    if status >= 400:
+        raise _status_error(status)

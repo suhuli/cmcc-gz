@@ -133,7 +133,6 @@ class DeepRegression:
             self.check("put/read", self.get(f"/{self.root_name}/folderA/alpha.bin") == alpha)
 
             self.move(f"/{self.root_name}/folderA/alpha.bin", f"/{self.root_name}/folderB/renamed.bin")
-            time.sleep(2)
             self.vfs.invalidate("/")
             folder_a_id = self.vfs.entry_at(f"/{self.root_name}/folderA").file_id
             folder_b_id = self.vfs.entry_at(f"/{self.root_name}/folderB").file_id
@@ -141,7 +140,6 @@ class DeepRegression:
             b_items = {item.get("name") for item in self.client.iter_folder_items(folder_b_id)}
             root_items = {item.get("name") for item in self.client.iter_folder_items("/")}
             self.check("move cloud state", "renamed.bin" in b_items and "alpha.bin" not in a_items, f"A={a_items} B={b_items} root={root_items}")
-            self.check("move cloud state", "renamed.bin" in b_items and "alpha.bin" not in a_items, f"A={a_items} B={b_items}")
             self.check("file move+rename", self.get(f"/{self.root_name}/folderB/renamed.bin") == alpha)
             self.vfs.invalidate("/")
             items = {item.get("name") for item in self.client.iter_folder_items(self.vfs.entry_at(f"/{self.root_name}/folderB").file_id)}

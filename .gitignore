@@ -10,8 +10,8 @@ dist/
 .ruff_cache/
 *.log
 *.tmp
-*.json
 config.json
+config.json.bad
 work/
 
 docs/
