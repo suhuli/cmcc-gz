@@ -284,6 +284,7 @@ func (p *Panel) status(w http.ResponseWriter, r *http.Request) {
 		"pending_phone":   pending,
 		"mount_supported": platform.Supported(),
 		"version":         p.o.Version,
+		"uploads":         st.Uploads,
 	})
 }
 

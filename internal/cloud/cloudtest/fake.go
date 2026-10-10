@@ -66,6 +66,23 @@ type Server struct {
 	PartURLsInCreate bool
 	// ListDelay 模拟列目录延迟。
 	ListDelay time.Duration
+
+	partGate  chan struct{}
+	failParts int
+}
+
+// SetPartGate 设置后，分片上传收到数据后要等通道有值或被关闭才完成（模拟慢速上传）。
+func (s *Server) SetPartGate(ch chan struct{}) {
+	s.mu.Lock()
+	s.partGate = ch
+	s.mu.Unlock()
+}
+
+// SetFailParts 让接下来的 n 次分片上传返回 503。
+func (s *Server) SetFailParts(n int) {
+	s.mu.Lock()
+	s.failParts = n
+	s.mu.Unlock()
 }
 
 // New 启动内存云盘。
@@ -498,6 +515,24 @@ func (s *Server) servePart(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "read", http.StatusBadRequest)
 		return
+	}
+	s.mu.Lock()
+	gate, failing := s.partGate, s.failParts > 0
+	if failing {
+		s.failParts--
+	}
+	s.Calls["part"]++
+	s.mu.Unlock()
+	if failing {
+		http.Error(w, "busy", http.StatusServiceUnavailable)
+		return
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-r.Context().Done():
+			return
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

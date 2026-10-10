@@ -58,6 +58,10 @@ type FS struct {
 	// EmptyFileDelay 是 0 字节新文件延迟创建的时间：
 	// Windows 复制文件时先 PUT 0 字节再 PUT 内容，延迟后可以省掉一次“创建 + 覆盖”。
 	EmptyFileDelay time.Duration
+	// UploadDelay 是文件写入完成到开始后台上传的等待时间（合并紧接着的改名/覆盖）。
+	UploadDelay time.Duration
+	// RetryDelays 是后台上传失败后的重试间隔；全部用完仍失败则放弃并保留本地副本。
+	RetryDelays []time.Duration
 	// ConsistencyWait 是改名/移动后等待服务端一致的最长时间。
 	ConsistencyWait time.Duration
 	// OnChange 在内容变化后回调（可选，用于日志或通知）。
@@ -67,36 +71,64 @@ type FS struct {
 	pending *pendingSet
 	locks   keyedMutex
 
+	stageDir   string        // 暂存写入内容与上传队列的目录
+	persistent bool          // 上传队列是否持久化（程序重启后继续上传）
+	sem        chan struct{} // 同时上传的文件数上限
+	persistMu  sync.Mutex
+	statMu     sync.Mutex
+	failed     []FailedUpload
+	bgMu       sync.Mutex
+	closed     bool
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-// New 创建文件系统。tmpDir 用于暂存上传内容，为空时使用系统临时目录。
-func New(c Cloud, v *vfs.FS, tmpDir string) (*FS, error) {
+// MaxConcurrentUploads 是同时进行的后台上传数。
+const MaxConcurrentUploads = 3
+
+// New 创建文件系统。
+//
+// tmpDir 用于暂存上传内容，为空时使用系统临时目录。queueDir 非空时，写入的文件暂存在 queueDir
+// 并把上传队列持久化到那里：程序退出或断开挂载时未完成的上传会在下次启动时继续。
+func New(c Cloud, v *vfs.FS, tmpDir, queueDir string) (*FS, error) {
 	if tmpDir == "" {
 		tmpDir = filepath.Join(os.TempDir(), "mcloudmount-upload")
 	}
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+	stage := tmpDir
+	if queueDir != "" {
+		stage = queueDir
+	}
+	if err := os.MkdirAll(stage, 0o700); err != nil {
 		return nil, fmt.Errorf("创建上传缓存目录失败: %w", err)
 	}
-	cleanTmp(tmpDir)
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &FS{
 		c:               c,
 		v:               v,
 		tmpDir:          tmpDir,
 		EmptyFileDelay:  5 * time.Second,
+		UploadDelay:     time.Second,
+		RetryDelays:     []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute, 10 * time.Minute},
 		ConsistencyWait: 10 * time.Second,
 		props:           newPropStore(),
+		stageDir:        stage,
+		persistent:      queueDir != "",
+		sem:             make(chan struct{}, MaxConcurrentUploads),
 		ctx:             ctx,
 		cancel:          cancel,
 	}
 	f.pending = &pendingSet{m: map[string]*placeholder{}}
+	if f.persistent {
+		f.loadQueue()
+	} else {
+		cleanTmp(stage)
+	}
 	return f, nil
 }
 
-// cleanTmp 删除上次异常退出遗留的上传缓存。
+// cleanTmp 删除上次异常退出遗留的暂存文件。
 func cleanTmp(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -112,13 +144,53 @@ func cleanTmp(dir string) {
 // VFS 返回底层路径缓存。
 func (f *FS) VFS() *vfs.FS { return f.v }
 
-// Close 立即创建所有待创建的空文件，并停止后台任务。
+// Close 停止后台任务。
+//
+// 持久化模式下，正在进行的上传会被中断并保留在队列中，下次启动时继续；
+// 否则先等待并完成所有待上传的文件。延迟创建的空文件会立即创建。
 func (f *FS) Close() error {
-	for _, p := range f.pending.drain() {
-		f.flushPlaceholder(p)
+	f.bgMu.Lock()
+	if f.closed {
+		f.bgMu.Unlock()
+		return nil
+	}
+	f.closed = true
+	f.bgMu.Unlock()
+
+	f.pending.stopTimers()
+	if f.persistent {
+		f.cancel()
+	}
+	f.wg.Wait()
+	for _, p := range f.pending.stopTimers() {
+		if f.persistent && p.content() {
+			continue
+		}
+		snap, ok := f.pending.begin(p, f.pending.keyOf(p))
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		if !p.content() {
+			cancel()
+			ctx, cancel = context.WithTimeout(context.Background(), time.Minute)
+		}
+		err := f.uploadEntry(ctx, &snap)
+		cancel()
+		f.pending.finish(p, err == nil, err)
+		if err != nil {
+			slog.Error("关闭前上传失败", "path", snap.path, "error", err)
+		} else if snap.local != "" {
+			f.removeLater(snap.local)
+		}
 	}
 	f.cancel()
-	f.wg.Wait()
+	f.persist()
+	if f.persistent {
+		if n := f.UploadStats().Pending; n > 0 {
+			slog.Info("还有文件未上传完成，下次启动时继续", "count", n)
+		}
+	}
 	return nil
 }
 
@@ -208,7 +280,23 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 	unlock := f.locks.lock(key(name))
 	defer unlock()
 	if p := f.pending.take(key(name)); p != nil {
+		if p.local != "" {
+			f.removeLater(p.local)
+		}
 		f.props.removeTree(key(name))
+		f.persist()
+		// 云端可能还有旧版本（待上传的内容本来要替换它）：一并删除
+		if !p.replace {
+			return nil
+		}
+		e, ok, err := f.v.Lookup(ctx, p.parentID, p.name)
+		if err != nil || !ok {
+			return nil
+		}
+		if err := f.c.Trash(ctx, []string{e.ID}); err != nil {
+			return mapErr("remove", name, err)
+		}
+		f.v.Removed(e)
 		return nil
 	}
 	e, err := f.v.Resolve(ctx, name)
@@ -219,6 +307,17 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 		return mapErr("remove", name, err)
 	}
 	f.v.Removed(e)
+	if e.IsDir {
+		dropped := f.pending.dropPrefix(name)
+		for _, p := range dropped {
+			if p.local != "" {
+				f.removeLater(p.local)
+			}
+		}
+		if len(dropped) > 0 {
+			f.persist()
+		}
+	}
 	f.props.removeTree(key(name))
 	slog.Info("删除", "path", name)
 	f.changed("remove", name)
@@ -244,11 +343,21 @@ func (f *FS) Rename(ctx context.Context, oldName, newName string) error {
 	if err := validName(dstBase); err != nil {
 		return &fs.PathError{Op: "rename", Path: newName, Err: err}
 	}
-	// 尚未上传的空文件：只改本地记录
+	// 尚未上传的文件：只改本地记录
 	if p := f.pending.take(key(oldName)); p != nil {
-		p.path, p.parentID, p.name = newName, dstParent.ID, dstBase
-		f.pending.put(key(newName), p, f)
+		np := p.clone()
+		np.path, np.parentID, np.name = newName, dstParent.ID, dstBase
+		f.pending.put(key(newName), np, f, f.delayFor(np))
 		f.props.move(key(oldName), key(newName))
+		f.persist()
+		// 云端有旧版本：旧位置的文件也应随之消失
+		if p.replace {
+			if e, ok, err := f.v.Lookup(ctx, p.parentID, p.name); err == nil && ok && !e.IsDir {
+				if err := f.c.Trash(ctx, []string{e.ID}); err == nil {
+					f.v.Removed(e)
+				}
+			}
+		}
 		return nil
 	}
 	src, err := f.v.Resolve(ctx, oldName)
@@ -259,6 +368,9 @@ func (f *FS) Rename(ctx context.Context, oldName, newName string) error {
 		return mapErr("rename", oldName, err)
 	}
 	f.props.move(key(oldName), key(newName))
+	if src.IsDir && f.pending.rekeyPrefix(oldName, newName) {
+		f.persist()
+	}
 	slog.Info("移动/改名", "from", oldName, "to", newName)
 	f.changed("rename", newName)
 	return nil
@@ -339,7 +451,13 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, _ os.FileMode)
 		return &dirFile{fs: f, e: vfs.Root(), path: name, ctx: ctx}, nil
 	}
 	if p := f.pending.get(key(name)); p != nil {
-		return &emptyFile{fs: f, path: name, fi: p.info()}, nil
+		if p.local == "" {
+			return &emptyFile{fs: f, path: name, fi: p.info()}, nil
+		}
+		if fh, err := os.Open(p.local); err == nil {
+			return &stagedFile{fs: f, path: name, fi: p.info(), f: fh}, nil
+		}
+		// 本地副本已删除：刚好上传完成，改从云端读取
 	}
 	e, err := f.v.Resolve(ctx, name)
 	if err != nil {
@@ -388,10 +506,10 @@ func (f *FS) openWrite(ctx context.Context, name string, flag int) (webdav.File,
 			w.name = existing.Name // 不区分大小写命中时保留云端原名
 		}
 	}
-	tmp, err := os.CreateTemp(f.tmpDir, "put-*")
+	tmp, err := os.CreateTemp(f.stageDir, "put-*")
 	if err != nil {
 		if w.placeholder != nil {
-			f.pending.put(key(name), w.placeholder, f)
+			f.pending.put(key(name), w.placeholder, f, f.delayFor(w.placeholder))
 		}
 		unlock()
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
@@ -416,7 +534,8 @@ func validName(name string) error {
 // ---------------------------------------------------------------- 上传与替换
 
 // commitUpload 把暂存内容上传为 parent/name；existing 非空时安全替换旧文件。
-func (f *FS) commitUpload(ctx context.Context, parent vfs.Entry, name string, existing *vfs.Entry, src io.ReaderAt, size int64, sum string) error {
+func (f *FS) commitUpload(ctx context.Context, parentID, name, display string, existing *vfs.Entry, src io.ReaderAt, size int64, sum string) error {
+	parent := vfs.Entry{ID: parentID}
 	start := time.Now()
 	uploadName := name
 	if existing != nil {
@@ -450,7 +569,7 @@ func (f *FS) commitUpload(ctx context.Context, parent vfs.Entry, name string, ex
 	if res.Rapid {
 		mode = "秒传"
 	}
-	slog.Info(mode+"完成", "path", path.Join("/", parent.Name, name), "size", size, "elapsed", time.Since(start).Round(time.Millisecond))
+	slog.Info(mode+"完成", "path", display, "size", size, "elapsed", time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
@@ -569,18 +688,20 @@ func (d *dirFile) load() error {
 	if err != nil {
 		return mapErr("readdir", d.path, err)
 	}
-	seen := map[string]bool{}
-	for _, e := range list {
-		if internalName(e.Name) {
-			continue
-		}
-		seen[strings.ToLower(e.Name)] = true
-		d.entries = append(d.entries, entryInfo(e))
-	}
+	// 待上传的文件覆盖云端同名条目（它是更新的版本）
+	pend := map[string]bool{}
 	for _, p := range d.fs.pending.inDir(d.e.ID) {
-		if !seen[strings.ToLower(p.name)] {
+		lower := strings.ToLower(p.name)
+		if !pend[lower] {
+			pend[lower] = true
 			d.entries = append(d.entries, p.info())
 		}
+	}
+	for _, e := range list {
+		if internalName(e.Name) || pend[strings.ToLower(e.Name)] {
+			continue
+		}
+		d.entries = append(d.entries, entryInfo(e))
 	}
 	sort.Slice(d.entries, func(i, j int) bool { return d.entries[i].Name() < d.entries[j].Name() })
 	d.loaded = true

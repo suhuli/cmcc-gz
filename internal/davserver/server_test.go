@@ -3,6 +3,7 @@ package davserver
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
@@ -23,9 +24,29 @@ import (
 	"mcloudmount/internal/vfs"
 )
 
+// settledCloud 在查询云端状态前先等待后台上传队列清空（上传是异步的）。
+type settledCloud struct {
+	*cloudtest.Server
+	t  *testing.T
+	fs *davfs.FS
+}
+
+func (c *settledCloud) settle() {
+	c.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.fs.WaitUploads(ctx); err != nil {
+		c.t.Fatalf("后台上传未完成: %v %+v", err, c.fs.UploadStats())
+	}
+}
+
+func (c *settledCloud) Find(p string) *cloudtest.Node { c.settle(); return c.Server.Find(p) }
+func (c *settledCloud) Children(p string) []string    { c.settle(); return c.Server.Children(p) }
+func (c *settledCloud) CallCount(name string) int     { c.settle(); return c.Server.CallCount(name) }
+
 type env struct {
 	t     *testing.T
-	cloud *cloudtest.Server
+	cloud *settledCloud
 	fs    *davfs.FS
 	http  *httptest.Server
 	user  string
@@ -36,6 +57,12 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	srv := cloudtest.New()
 	t.Cleanup(srv.Close)
+	return newEnvWith(t, srv, "")
+}
+
+// newEnvWith 使用给定的内存云盘创建环境；queueDir 非空时启用持久化上传队列。
+func newEnvWith(t *testing.T, srv *cloudtest.Server, queueDir string) *env {
+	t.Helper()
 	store, err := config.Open(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -47,16 +74,18 @@ func newEnv(t *testing.T) *env {
 	cl := cloud.New(store)
 	cl.SetPersonalURL(srv.PersonalURL())
 	cl.RetryBase = time.Millisecond
-	fsys, err := davfs.New(cl, vfs.New(cl), t.TempDir())
+	fsys, err := davfs.New(cl, vfs.New(cl), t.TempDir(), queueDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fsys.EmptyFileDelay = 300 * time.Millisecond
+	fsys.UploadDelay = 0
+	fsys.RetryDelays = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
 	fsys.ConsistencyWait = time.Second
 	ds := New(fsys, Options{Host: "127.0.0.1", Port: 0, User: "u", Password: "secret"})
 	hs := httptest.NewServer(ds.Handler())
 	t.Cleanup(func() { hs.Close(); fsys.Close() })
-	return &env{t: t, cloud: srv, fs: fsys, http: hs, user: "u", pass: "secret"}
+	return &env{t: t, cloud: &settledCloud{Server: srv, t: t, fs: fsys}, fs: fsys, http: hs, user: "u", pass: "secret"}
 }
 
 func (e *env) do(method, p string, body []byte, hdr map[string]string) *http.Response {

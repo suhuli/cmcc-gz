@@ -193,6 +193,12 @@
         <div class="notice err hidden" id="heroErr"></div>
       </div>
 
+      <div class="card hidden" id="upCard">
+        <h2><span>后台上传</span><span class="muted small" id="upSummary"></span></h2>
+        <div class="muted small">复制到盘符的文件会先保存在本机，再在后台上传到云盘；失败会自动重试。退出程序后，未完成的上传会在下次启动时继续。</div>
+        <div id="upList" class="small" style="margin-top:10px"></div>
+      </div>
+
       <div class="card warncard hidden" id="wcCard">
         <h2>建议优化 Windows WebClient 设置</h2>
         <div class="muted small" id="wcDesc">Windows 默认限制通过网络驱动器复制的单个文件不能超过 50 MB，请求超时只有 60 秒，且 WebClient 服务不会自动启动。</div>
@@ -400,9 +406,29 @@
     if (s.error) { err.textContent = s.error; err.classList.remove('hidden'); }
     else err.classList.add('hidden');
 
+    renderUploads(s.uploads);
+
     $('loginCard').classList.toggle('hidden', s.logged_in && !s.token_expired);
     $('accountCard').classList.toggle('hidden', !s.logged_in);
     if (s.pending_phone && !$('phone').value) $('phone').value = s.pending_phone;
+  }
+
+  function renderUploads(u) {
+    const items = (u && u.items) || [], failed = (u && u.failed) || [];
+    $('upCard').classList.toggle('hidden', !items.length && !failed.length);
+    if (!items.length && !failed.length) return;
+    const active = items.filter((x) => x.uploading).length;
+    $('upSummary').textContent = items.length ? (active + ' 个上传中，共 ' + items.length + ' 个待完成') : '全部完成';
+    const rows = items.slice(0, 20).map((x) => {
+      const state = x.uploading ? '<span style="color:var(--primary)">上传中…</span>' :
+        (x.attempts ? '<span style="color:var(--warn,#b45309)">第 ' + x.attempts + ' 次失败，稍后重试：' + esc(x.error || '') + '</span>' : '<span class="muted">等待上传</span>');
+      return '<div class="row" style="justify-content:space-between;gap:12px;padding:4px 0;border-top:1px solid var(--line)"><span style="word-break:break-all">' + esc(x.path) + ' <span class="muted">' + fmtSize(x.size) + '</span></span>' + state + '</div>';
+    });
+    if (items.length > 20) rows.push('<div class="muted">还有 ' + (items.length - 20) + ' 个…</div>');
+    failed.slice().reverse().forEach((x) => {
+      rows.push('<div class="notice err" style="margin-top:8px">上传失败：' + esc(x.path) + '（' + esc(x.error) + '）' + (x.saved ? '<br>本地副本：' + esc(x.saved) : '') + '</div>');
+    });
+    $('upList').innerHTML = rows.join('');
   }
 
   async function refreshStatus() {
@@ -598,7 +624,7 @@
   }, '已优化 WebClient 设置。已挂载的盘符需要卸载后重新挂载才会生效'));
 
   // ---------- 退出 ----------
-  $('quitBtn').addEventListener('click', () => openModal({ title: '退出 mCloudMount', confirmOnly: true, text: '退出后盘符会被卸载，后台服务停止。', ok: '退出', danger: true }, async () => {
+  $('quitBtn').addEventListener('click', () => openModal({ title: '退出 mCloudMount', confirmOnly: true, text: '退出后盘符会被卸载，后台服务停止。' + ((S.status && S.status.uploads && S.status.uploads.pending) ? '还有 ' + S.status.uploads.pending + ' 个文件未上传完成，下次启动时会继续上传。' : ''), ok: '退出', danger: true }, async () => {
     await api('/api/quit', {});
     document.body.innerHTML = '<div style="padding:60px;text-align:center;font-size:16px">mCloudMount 已退出，可以关闭此页面。</div>';
   }));

@@ -43,6 +43,8 @@ type Status struct {
 	ServerRunning bool   `json:"server_running"`
 	WebDAV        string `json:"webdav"`
 	Since         int64  `json:"since"`
+	// Uploads 是后台上传队列（挂载运行时才有）。
+	Uploads *davfs.UploadStats `json:"uploads,omitempty"`
 }
 
 // Options 控制启动行为。
@@ -110,8 +112,12 @@ func (s *Service) Status() Status {
 	if !s.since.IsZero() {
 		st.Since = s.since.Unix()
 	}
-	dav, set, mapped := s.dav, s.settings, s.mapped
+	dav, set, mapped, fsys := s.dav, s.settings, s.mapped, s.fs
 	s.mu.Unlock()
+	if fsys != nil {
+		u := fsys.UploadStats()
+		st.Uploads = &u
+	}
 	if dav != nil && dav.Running() {
 		st.ServerRunning = true
 		st.WebDAV = "http://" + net.JoinHostPort(set.Host, strconv.Itoa(set.Port)) + "/"
@@ -240,7 +246,7 @@ func (s *Service) Start(ctx context.Context, opts Options) (err error) {
 		return err
 	}
 	v := vfs.New(s.client)
-	fsys, err := davfs.New(s.client, v, tmp)
+	fsys, err := davfs.New(s.client, v, tmp, queueDir(s.store.Get().Account.UserID))
 	if err != nil {
 		os.RemoveAll(tmp)
 		return fmt.Errorf("初始化文件系统失败: %w", err)
@@ -427,6 +433,20 @@ func (s *Service) fail(msg string) {
 // ---------------------------------------------------------------- 临时目录
 
 // prepareTmp 为本次运行创建独立的暂存目录，并清理之前异常退出遗留的目录。
+// queueDir 是持久化上传队列的目录（按账号区分，避免换号后上传到错误的目录 ID）。
+func queueDir(userID string) string {
+	name := "default"
+	if userID != "" {
+		name = strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, userID)
+	}
+	return filepath.Join(config.Dir(), "uploads", name)
+}
+
 func prepareTmp() (string, error) {
 	base := filepath.Join(config.Dir(), "tmp")
 	if err := os.MkdirAll(base, 0o700); err != nil {

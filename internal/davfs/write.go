@@ -10,12 +10,10 @@ import (
 	"log/slog"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"mcloudmount/internal/cloud"
 	"mcloudmount/internal/vfs"
 )
 
@@ -167,17 +165,23 @@ func (w *writeFile) Patch(p []Proppatch) ([]Propstat, error) {
 	return w.fs.props.patch(key(w.path), p), nil
 }
 
-// Close 校验传输完整性后上传。失败时返回错误，webdav 会向客户端报告失败。
+// Close 校验传输完整性后把内容放入上传队列并立即返回；真正的云端上传在后台进行。
+//
+// 早期版本在 Close 里同步上传，Windows WebClient 要等到云端上传结束才收到 PUT 的响应，
+// 文件稍大或网络稍慢就会超时，资源管理器报“网络错误”。
 func (w *writeFile) Close() error {
 	if w.closed {
 		return nil
 	}
 	w.closed = true
 	defer w.unlock()
+	keep := false
 	defer func() {
 		name := w.tmp.Name()
 		_ = w.tmp.Close()
-		_ = os.Remove(name)
+		if !keep {
+			_ = os.Remove(name)
+		}
 	}()
 
 	problem := w.writeErr
@@ -193,151 +197,53 @@ func (w *writeFile) Close() error {
 		return &fs.PathError{Op: "close", Path: w.path, Err: problem}
 	}
 
-	// 既没有写入、也没有要求清空：保持云端文件不变（保险措施，防止误覆盖）
-	if !w.wrote && !w.truncate && w.existing != nil {
+	// 既没有写入、也没有要求清空：保持原内容不变（保险措施，防止误覆盖）
+	if !w.wrote && !w.truncate && (w.existing != nil || w.placeholder != nil) {
 		w.restorePlaceholder()
 		return nil
 	}
+	old := w.placeholder
+	now := time.Now()
+	p := &placeholder{path: w.path, parentID: w.parent.ID, name: w.name, created: now, size: w.size}
 	if w.size == 0 {
 		switch {
-		case w.existing == nil:
+		case w.existing == nil && (old == nil || !old.content()):
 			// 新建空文件：延迟创建，通常紧接着就会写入真正的内容
-			w.fs.pending.put(key(w.path), &placeholder{path: w.path, parentID: w.parent.ID, name: w.name, created: time.Now()}, w.fs)
+			p.sum = emptySHA256
+			w.fs.pending.put(key(w.path), p, w.fs, w.fs.EmptyFileDelay)
 			return nil
-		case w.existing.Size == 0:
+		case w.existing != nil && w.existing.Size == 0:
 			return nil
 		}
-	}
-
-	sum := ""
-	if w.seqOK {
-		sum = hex.EncodeToString(w.hasher.Sum(nil))
+		// 把已有文件清空：需要替换云端内容
+		p.sum, p.replace = emptySHA256, true
 	} else {
-		w.hasher.Reset()
-		if _, err := io.Copy(w.hasher, io.NewSectionReader(w.tmp, 0, w.size)); err != nil {
-			w.restorePlaceholder()
-			return &fs.PathError{Op: "close", Path: w.path, Err: err}
+		if w.seqOK {
+			p.sum = hex.EncodeToString(w.hasher.Sum(nil))
+		} else {
+			w.hasher.Reset()
+			if _, err := io.Copy(w.hasher, io.NewSectionReader(w.tmp, 0, w.size)); err != nil {
+				w.restorePlaceholder()
+				return &fs.PathError{Op: "close", Path: w.path, Err: err}
+			}
+			p.sum = hex.EncodeToString(w.hasher.Sum(nil))
 		}
-		sum = hex.EncodeToString(w.hasher.Sum(nil))
+		p.local, p.replace = w.tmp.Name(), true
+		keep = true
 	}
-	// 上传不跟随请求取消：客户端已经发完数据，中途放弃会留下半成品
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.ctx), 6*time.Hour)
-	defer cancel()
-	if err := w.fs.commitUpload(ctx, w.parent, w.name, w.existing, w.tmp, w.size, sum); err != nil {
-		slog.Error("上传失败", "path", w.path, "error", err)
-		w.restorePlaceholder()
-		return mapErr("upload", w.path, err)
+	if old != nil && old.local != "" && old.local != p.local {
+		w.fs.removeLater(old.local)
 	}
-	w.fs.changed("write", w.path)
+	w.fs.pending.put(key(w.path), p, w.fs, w.fs.UploadDelay)
+	w.fs.persist()
+	slog.Info("已接收文件，后台上传中", "path", w.path, "size", w.size)
 	return nil
 }
 
 func (w *writeFile) restorePlaceholder() {
 	if w.placeholder != nil {
-		w.fs.pending.put(key(w.path), w.placeholder, w.fs)
+		w.fs.pending.put(key(w.path), w.placeholder, w.fs, w.fs.delayFor(w.placeholder))
 	}
-}
-
-// ---------------------------------------------------------------- 待创建的空文件
-
-type placeholder struct {
-	path     string
-	parentID string
-	name     string
-	created  time.Time
-	timer    *time.Timer
-}
-
-func (p *placeholder) info() *fileInfo {
-	return &fileInfo{name: p.name, size: 0, mod: p.created, etag: fmt.Sprintf(`"p-%d"`, p.created.UnixNano())}
-}
-
-type pendingSet struct {
-	mu sync.Mutex
-	m  map[string]*placeholder
-}
-
-func (s *pendingSet) get(k string) *placeholder {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.m[k]
-}
-
-// take 取出并取消定时创建。
-func (s *pendingSet) take(k string) *placeholder {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p := s.m[k]
-	if p != nil {
-		delete(s.m, k)
-		if p.timer != nil {
-			p.timer.Stop()
-		}
-	}
-	return p
-}
-
-func (s *pendingSet) put(k string, p *placeholder, f *FS) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if old := s.m[k]; old != nil && old.timer != nil {
-		old.timer.Stop()
-	}
-	s.m[k] = p
-	p.timer = time.AfterFunc(f.EmptyFileDelay, func() {
-		if cur := s.take(k); cur == p {
-			f.wg.Add(1)
-			defer f.wg.Done()
-			unlock := f.locks.lock(k)
-			defer unlock()
-			f.flushPlaceholder(p)
-		} else if cur != nil {
-			s.put(k, cur, f) // 被替换过：放回
-		}
-	})
-}
-
-func (s *pendingSet) inDir(parentID string) []*placeholder {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []*placeholder
-	for _, p := range s.m {
-		if p.parentID == parentID {
-			out = append(out, p)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
-	return out
-}
-
-func (s *pendingSet) drain() []*placeholder {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]*placeholder, 0, len(s.m))
-	for k, p := range s.m {
-		if p.timer != nil {
-			p.timer.Stop()
-		}
-		out = append(out, p)
-		delete(s.m, k)
-	}
-	return out
-}
-
-// flushPlaceholder 在云端创建空文件。
-func (f *FS) flushPlaceholder(p *placeholder) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if e, ok, err := f.v.Lookup(ctx, p.parentID, p.name); err == nil && ok && !e.IsDir {
-		return // 已存在（例如被其他客户端创建）
-	}
-	res, err := f.c.Upload(ctx, cloud.UploadRequest{ParentID: p.parentID, Name: p.name, Size: 0, SHA256: emptySHA256, Source: strings.NewReader("")})
-	if err != nil {
-		slog.Error("创建空文件失败", "path", p.path, "error", err)
-		return
-	}
-	f.v.Added(vfs.Entry{ID: res.FileID, ParentID: p.parentID, Name: res.Name, Mod: p.created, Created: p.created, Hash: emptySHA256})
-	slog.Info("创建空文件", "path", p.path)
 }
 
 // ---------------------------------------------------------------- 路径锁
