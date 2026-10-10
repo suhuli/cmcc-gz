@@ -13,6 +13,7 @@ func TestRingAndLevels(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "a.log")
 	ring := Setup(Options{Level: "INFO", File: f})
+	t.Cleanup(Close)
 	slog.Debug("hidden")
 	slog.Info("hello", "k", "v")
 	slog.Warn("careful")
@@ -47,6 +48,7 @@ func TestRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer w.Close()
 	for i := 0; i < 50; i++ {
 		_, _ = w.Write([]byte("0123456789\n"))
 	}

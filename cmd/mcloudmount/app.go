@@ -149,6 +149,7 @@ func runApp(args []string) int {
 		p.Shutdown(ctx)
 		cancel()
 		slog.Info("已退出")
+		logx.Close()
 	}
 
 	if tray.Supported() {

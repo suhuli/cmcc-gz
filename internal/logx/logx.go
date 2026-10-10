@@ -82,6 +82,18 @@ func (r *rotatingFile) open() error {
 	return nil
 }
 
+// Close 关闭日志文件。
+func (r *rotatingFile) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.f == nil {
+		return nil
+	}
+	err := r.f.Close()
+	r.f = nil
+	return err
+}
+
 func (r *rotatingFile) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -195,11 +207,18 @@ func Setup(o Options) *Ring {
 	lv := level
 	lv.Set(ParseLevel(o.Level))
 	h := &handler{level: lv, ring: ring, mu: &sync.Mutex{}}
+	fileMu.Lock()
+	if current != nil {
+		_ = current.Close()
+		current = nil
+	}
 	if o.File != "" {
 		if f, err := openRotating(o.File, 2<<20); err == nil {
 			h.out = append(h.out, f)
+			current = f
 		}
 	}
+	fileMu.Unlock()
 	if o.Console {
 		h.out = append(h.out, os.Stderr)
 	}
@@ -207,7 +226,21 @@ func Setup(o Options) *Ring {
 	return ring
 }
 
-var level = &slog.LevelVar{}
+var (
+	level   = &slog.LevelVar{}
+	fileMu  sync.Mutex
+	current *rotatingFile
+)
+
+// Close 关闭日志文件（之后的日志只写入内存与控制台）。
+func Close() {
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	if current != nil {
+		_ = current.Close()
+		current = nil
+	}
+}
 
 // SetLevel 运行时修改日志级别。
 func SetLevel(s string) { level.Set(ParseLevel(s)) }
