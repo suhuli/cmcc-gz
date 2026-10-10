@@ -1,18 +1,16 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-build/
-dist/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-*.log
-*.tmp
+# 构建产物
+/dist/
+*.exe
+*.test
+*.out
+
+# 本地运行数据
 config.json
 config.json.bad
-work/
+*.log
+*.tmp
+/tmp/
 
-docs/
-*.spec
+# 编辑器
+.vscode/
+.idea/

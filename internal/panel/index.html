@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mCloudMount</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root {
+    --bg: #f5f8ff; --surface: #ffffff; --surface-2: #f0f5ff; --text: #0f172a; --muted: #64748b;
+    --line: #e2e8f0; --primary: #2563eb; --primary-600: #1d4ed8; --primary-50: #eff6ff;
+    --ok: #16a34a; --warn: #d97706; --err: #dc2626; --idle: #94a3b8;
+    --shadow: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(37,99,235,.06);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1222; --surface: #111a2e; --surface-2: #17223a; --text: #e6edf9; --muted: #8fa0bd;
+      --line: #22304d; --primary: #3b82f6; --primary-600: #2563eb; --primary-50: #13213f;
+      --shadow: 0 1px 2px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px;
+  }
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  aside {
+    background: var(--surface); border-right: 1px solid var(--line); padding: 22px 14px; display: flex; flex-direction: column; gap: 6px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
+  .logo { width: 36px; height: 36px; }
+  .brand b { font-size: 15px; } .brand small { display: block; color: var(--muted); font-size: 11.5px; }
+  nav a {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; color: var(--muted);
+    text-decoration: none; font-weight: 500; cursor: pointer;
+  }
+  nav a:hover { background: var(--surface-2); color: var(--text); }
+  nav a.on { background: var(--primary-50); color: var(--primary); font-weight: 600; }
+  nav svg { width: 18px; height: 18px; flex: none; }
+  .side-foot { margin-top: auto; color: var(--muted); font-size: 12px; padding: 8px; }
+  main { padding: 26px 30px 60px; max-width: 1080px; width: 100%; }
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -.2px; }
+  .sub { color: var(--muted); margin-top: 4px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
+  .card + .card { margin-top: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+  .stat .label { color: var(--muted); font-size: 12.5px; }
+  .stat .value { font-size: 17px; font-weight: 700; margin-top: 6px; word-break: break-all; }
+  .stat .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+  .hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  .hero .title { font-size: 18px; font-weight: 700; }
+  .hero .desc { color: var(--muted); margin-top: 4px; }
+  .btn {
+    border: 0; border-radius: 10px; padding: 11px 18px; font: inherit; font-weight: 600; cursor: pointer; background: var(--primary); color: #fff;
+    transition: background .15s, transform .05s;
+  }
+  .btn:hover { background: var(--primary-600); } .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn.ghost:hover { border-color: var(--primary); color: var(--primary); background: transparent; }
+  .btn.danger { background: var(--err); } .btn.danger:hover { background: #b91c1c; }
+  .btn.sm { padding: 7px 11px; font-size: 13px; }
+  .btn.big { padding: 14px 26px; font-size: 15px; }
+
+  .field { display: flex; flex-direction: column; gap: 6px; flex: 1 1 200px; }
+  .field label { font-size: 12.5px; color: var(--muted); }
+  input[type=text], input[type=tel], input:not([type]) {
+    font: inherit; padding: 11px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); outline: none; min-width: 0;
+  }
+  input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+  .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .muted { color: var(--muted); } .small { font-size: 12.5px; }
+  .notice { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--primary-50); color: var(--primary); font-size: 13px; }
+  .notice.err { background: #fef2f2; color: var(--err); } @media (prefers-color-scheme: dark) { .notice.err { background: #2a1416; } }
+
+  .switch { position: relative; width: 42px; height: 24px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 999px; transition: .2s; cursor: pointer; }
+  .switch span::before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+  .switch input:checked + span { background: var(--primary); }
+  .switch input:checked + span::before { transform: translateX(18px); }
+  .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .setting:last-child { border-bottom: 0; }
+  .setting .t { font-weight: 600; } .setting .d { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+
+  .crumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13.5px; }
+  .crumbs button { border: 0; background: none; color: var(--primary); cursor: pointer; padding: 4px 6px; border-radius: 6px; font: inherit; }
+  .crumbs button:hover { background: var(--primary-50); }
+  .crumbs .sep { color: var(--muted); }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: space-between; margin-bottom: 14px; }
+  .toolbar .group { display: flex; gap: 8px; flex-wrap: wrap; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 11px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+  tbody tr { cursor: default; }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr.dir .name { color: var(--primary); cursor: pointer; font-weight: 600; }
+  td.check { width: 36px; } td.size, td.date { color: var(--muted); white-space: nowrap; font-size: 13px; }
+  td.act { width: 150px; text-align: right; white-space: nowrap; }
+  .fileicon { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: var(--primary-50); color: var(--primary); margin-right: 10px; vertical-align: middle; font-size: 13px; }
+  .empty { text-align: center; color: var(--muted); padding: 36px 0; }
+
+  .logs { background: #0b1222; color: #c7d2e6; border-radius: 12px; padding: 12px 14px; height: 260px; overflow: auto; font: 12.5px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; }
+  .logs .lv-ERROR { color: #fca5a5; } .logs .lv-WARNING { color: #fcd34d; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.42); display: none; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .modal-bg.show { display: flex; }
+  .modal { background: var(--surface); border-radius: 16px; padding: 22px; width: min(420px, 100%); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+  .modal h3 { margin: 0 0 14px; font-size: 16px; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); background: var(--text); color: var(--bg);
+    padding: 11px 16px; border-radius: 12px; font-size: 13.5px; opacity: 0; pointer-events: none; transition: .22s; box-shadow: var(--shadow); max-width: 92vw;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); } .toast.err { background: var(--err); color: #fff; }
+  .hidden { display: none !important; }
+  select { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+  input[type=number] { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--text); width: 110px; }
+  .warncard { border-color: #f59e0b; } .warncard h2 { color: var(--warn); }
+  .kv { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px 12px; align-items: center; font-size: 13.5px; }
+  .kv code { font: 12.5px ui-monospace, Consolas, monospace; background: var(--surface-2); padding: 4px 8px; border-radius: 6px; word-break: break-all; }
+  .progress { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 10px; }
+  .progress > div { height: 100%; width: 0; background: var(--primary); transition: width .2s; }
+  .side-foot .btn { width: 100%; margin-top: 8px; }
+  .spin { width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.45); border-top-color: #fff; border-radius: 50%; display: inline-block; animation: sp .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; flex-direction: row; align-items: center; padding: 12px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    .brand { padding: 0 8px 0 0; } .brand small { display: none; }
+    nav { display: flex; gap: 4px; } nav a { padding: 8px 10px; white-space: nowrap; }
+    .side-foot { display: none; }
+    main { padding: 18px 14px 60px; }
+    td.date, th.date { display: none; }
+    td.act { width: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">
+      <img class="logo" src="/favicon.png" alt="">
+      <div><b>mCloudMount</b><small>云盘挂载助手</small></div>
+    </div>
+    <nav>
+      <a data-view="overview" href="#overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+        概览
+      </a>
+      <a data-view="files" href="#files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        文件
+      </a>
+      <a data-view="settings" href="#settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        设置
+      </a>
+    </nav>
+    <div class="side-foot"><div id="sideFoot">mCloudMount</div><button class="btn ghost sm" id="quitBtn">退出程序</button></div>
+  </aside>
+
+  <main>
+    <!-- ================= 概览 ================= -->
+    <section id="view-overview">
+      <header class="top">
+        <div>
+          <h1>概览</h1>
+          <div class="sub">把你的云盘当作本地磁盘使用</div>
+        </div>
+        <div class="chip" id="pill"><span class="dot" id="pillDot"></span><span id="pillText">读取中…</span></div>
+      </header>
+
+      <div class="card">
+        <div class="hero">
+          <div>
+            <div class="title" id="heroTitle">—</div>
+            <div class="desc" id="heroDesc"></div>
+          </div>
+          <button class="btn big" id="mainBtn" disabled>读取中…</button>
+        </div>
+        <div class="notice err hidden" id="heroErr"></div>
+      </div>
+
+      <div class="card warncard hidden" id="wcCard">
+        <h2>建议优化 Windows WebClient 设置</h2>
+        <div class="muted small" id="wcDesc">Windows 默认限制通过网络驱动器复制的单个文件不能超过 50 MB，且 WebClient 服务不会自动启动。</div>
+        <div class="row" style="margin-top:12px;align-items:center">
+          <button class="btn" id="wcFixBtn">一键优化（需要管理员授权）</button>
+          <span class="muted small">将单文件上限调整为 4 GB 并设为自动启动，只需操作一次。</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="grid">
+          <div class="stat"><div class="label">账号</div><div class="value" id="sAccount">—</div><div class="hint" id="sAccountHint"></div></div>
+          <div class="stat"><div class="label">登录状态</div><div class="value" id="sToken">—</div><div class="hint" id="sTokenHint"></div></div>
+          <div class="stat"><div class="label">盘符</div><div class="value" id="sDrive">—</div><div class="hint" id="sDriveHint"></div></div>
+          <div class="stat"><div class="label">本地 WebDAV</div><div class="value" id="sWebdav">—</div><div class="hint" id="sWebdavHint"></div></div>
+        </div>
+      </div>
+
+      <div class="card hidden" id="loginCard">
+        <h2>登录你的云盘账号</h2>
+        <div class="row" id="stepPhone">
+          <div class="field"><label for="phone">手机号</label><input id="phone" type="tel" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel"></div>
+          <button class="btn" id="sendBtn">获取验证码</button>
+        </div>
+        <div class="row hidden" id="stepCode" style="margin-top:12px">
+          <div class="field"><label for="code">短信验证码</label><input id="code" type="text" inputmode="numeric" maxlength="8" placeholder="收到的 4–8 位验证码" autocomplete="one-time-code"></div>
+          <button class="btn" id="loginBtn">登录</button>
+          <button class="btn ghost" id="resendBtn" disabled>重新发送</button>
+        </div>
+        <p class="muted small" style="margin:12px 0 0">验证码只会发送到你的手机，并保存在本机。</p>
+      </div>
+
+      <div class="card hidden" id="accountCard">
+        <h2>账号</h2>
+        <div class="row" style="align-items:center">
+          <button class="btn ghost" id="logoutBtn" style="color:var(--err);border-color:var(--err)">退出登录</button>
+          <span class="muted small">退出会先卸载盘符，并清除本机的登录信息。</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 文件 ================= -->
+    <section id="view-files" class="hidden">
+      <header class="top">
+        <div>
+          <h1>文件</h1>
+          <div class="sub">在这里管理云盘中的文件夹与文件</div>
+        </div>
+      </header>
+      <div class="card">
+        <div class="toolbar">
+          <div class="crumbs" id="crumbs"></div>
+          <div class="group">
+            <button class="btn ghost sm" id="refreshBtn">刷新</button>
+            <button class="btn ghost sm" id="newFolderBtn">新建文件夹</button>
+            <button class="btn ghost sm" id="uploadBtn">上传文件</button>
+            <input type="file" id="uploadInput" multiple class="hidden">
+            <button class="btn ghost sm" id="openDriveBtn">在资源管理器中打开</button>
+            <button class="btn danger sm hidden" id="deleteBtn">删除所选</button>
+          </div>
+        </div>
+        <div id="uploadBox" class="notice hidden"><div id="uploadText"></div><div class="progress"><div id="uploadBar"></div></div></div>
+        <div id="fileState" class="muted hidden" style="padding:24px 0;text-align:center">加载中…</div>
+        <div style="overflow-x:auto">
+          <table id="fileTable">
+            <thead><tr><th class="check"><input type="checkbox" id="checkAll"></th><th>名称</th><th class="size">大小</th><th class="date">修改时间</th><th></th></tr></thead>
+            <tbody id="fileBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <p class="muted small" style="margin-top:12px">删除的文件会进入云盘回收站，可在官方客户端中恢复。</p>
+    </section>
+
+    <!-- ================= 设置 ================= -->
+    <section id="view-settings" class="hidden">
+      <header class="top">
+        <div>
+          <h1>设置</h1>
+          <div class="sub">开机启动、自动挂载与日志</div>
+        </div>
+      </header>
+      <div class="card">
+        <div class="setting">
+          <div><div class="t">开机自启</div><div class="d" id="autostartDesc">登录 Windows 后在后台运行，并显示托盘图标</div></div>
+          <label class="switch"><input type="checkbox" id="autostartToggle"><span></span></label>
+        </div>
+        <div class="setting">
+          <div><div class="t">启动时自动挂载</div><div class="d">程序启动后自动挂载盘符（需要已登录）</div></div>
+          <label class="switch"><input type="checkbox" id="automountToggle"><span></span></label>
+        </div>
+        <div class="setting">
+          <div><div class="t">托盘图标</div><div class="d">右键托盘可挂载/卸载、打开面板或退出。关闭面板窗口不会退出程序。</div></div>
+          <span class="chip" id="trayChip">—</span>
+        </div>
+      </div>
+      <div class="card" id="mountCard">
+        <h2>挂载</h2>
+        <div class="setting">
+          <div><div class="t">盘符</div><div class="d">挂载到资源管理器中的盘符（修改前需先卸载）</div></div>
+          <select id="driveSelect"></select>
+        </div>
+        <div class="setting">
+          <div><div class="t">WebDAV 端口</div><div class="d">本机 WebDAV 服务端口，被其他程序占用时可以修改</div></div>
+          <div class="row"><input type="number" id="portInput" min="1024" max="65535"><button class="btn ghost sm" id="portSave">保存</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>WebDAV 连接信息</h2>
+        <p class="muted small" style="margin-top:0">挂载后也可用其他 WebDAV 客户端（如 RaiDrive、Cyberduck、PotPlayer）连接本机服务。</p>
+        <div class="kv">
+          <span class="muted">地址</span><code id="wdAddr">—</code><span></span>
+          <span class="muted">用户名</span><code id="wdUser">—</code><span></span>
+          <span class="muted">密码</span><code id="wdPass">••••••</code><button class="btn ghost sm" id="wdShow">显示</button>
+        </div>
+        <p class="muted small" style="margin-bottom:0" id="cfgDir"></p>
+      </div>
+      <div class="card">
+        <h2>运行日志 <button class="btn ghost sm" id="logToggle">收起</button></h2>
+        <div class="logs" id="logs"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h3 id="modalTitle"></h3>
+    <div class="field" style="flex:auto"><input id="modalInput" type="text" autocomplete="off"></div>
+    <div class="notice err hidden" id="modalErr"></div>
+    <div class="actions">
+      <button class="btn ghost" id="modalCancel">取消</button>
+      <button class="btn" id="modalOk">确定</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const S = { status: null, settings: null, folder: '/', crumbs: [{ id: '/', name: '云盘' }], files: [], selected: new Set(), busy: false, countdown: 0, timer: null, mountBusy: false };
+
+  function toast(text, isErr) {
+    const t = $('toast'); t.textContent = text; t.classList.toggle('err', !!isErr); t.classList.add('show');
+    clearTimeout(toast._h); toast._h = setTimeout(() => t.classList.remove('show'), 3000);
+  }
+
+  async function api(path, body, method) {
+    const opts = { method: method || (body === undefined ? 'GET' : 'POST'), headers: {} };
+    if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.headers['X-MCM'] = '1'; opts.body = JSON.stringify(body); }
+    const res = await fetch(path, opts);
+    let data = {}; try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error(data.error || ('请求失败 ' + res.status));
+    return data;
+  }
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmtSize = (n) => { if (!n) return '—'; const u = ['B','KB','MB','GB','TB']; let i = 0; let v = n; while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; } return (i ? v.toFixed(1) : v) + ' ' + u[i]; };
+  const fmtDate = (s) => { if (!s) return '—'; const d = typeof s === 'number' ? new Date(s > 1e12 ? s : s * 1000) : new Date(s); return isNaN(d) ? String(s) : d.toLocaleString('zh-CN', { hour12: false }); };
+
+  // ---------- 路由 ----------
+  function route() {
+    const v = (location.hash || '#overview').slice(1);
+    const view = ['overview', 'files', 'settings'].includes(v) ? v : 'overview';
+    for (const name of ['overview', 'files', 'settings']) $('view-' + name).classList.toggle('hidden', name !== view);
+    document.querySelectorAll('nav a').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
+    if (view === 'files') loadFiles(false);
+    if (view === 'settings') loadSettings();
+  }
+  window.addEventListener('hashchange', route);
+
+  // ---------- 概览 ----------
+  function setPill(kind, text) { $('pillDot').className = 'dot ' + kind; $('pillText').textContent = text; }
+
+  function renderStatus(s) {
+    S.status = s;
+    $('sAccount').textContent = s.logged_in ? s.account : '未登录';
+    $('sAccountHint').textContent = s.logged_in ? '已保存在本机' : '请先用手机号登录';
+    $('sToken').textContent = !s.logged_in ? '—' : (s.token_expired ? '已过期' : '有效');
+    $('sTokenHint').textContent = s.logged_in && s.token_expired ? '请重新登录' : '';
+    $('sDrive').textContent = s.drive || '未设置';
+    $('sDriveHint').textContent = s.mounted ? '已挂载，可在资源管理器中打开' : '未挂载';
+    $('sWebdav').textContent = s.server_running ? '运行中' : '未运行';
+    $('sWebdavHint').textContent = s.webdav || '挂载后自动启动';
+    $('sideFoot').textContent = 'mCloudMount ' + (s.version || '');
+    if (!s.mount_supported) { s.drive = ''; s.mounted = s.phase === 'running'; }
+
+    const busy = s.phase === 'starting' || s.phase === 'stopping';
+    let kind = 'idle', chip = '未挂载';
+    if (busy) { kind = 'warn'; chip = s.message || '处理中'; }
+    else if (s.phase === 'error') { kind = 'err'; chip = '出错'; }
+    else if (s.mounted) { kind = 'ok'; chip = s.drive ? '已挂载 ' + s.drive : 'WebDAV 运行中'; }
+    else if (!s.logged_in) chip = '未登录';
+    setPill(kind, chip);
+
+    $('heroTitle').textContent = s.mounted ? (s.drive ? '云盘已挂载' : 'WebDAV 服务运行中') : (!s.logged_in ? '还未登录' : (s.token_expired ? '登录已过期' : '准备就绪'));
+    $('heroDesc').textContent = s.mounted ? (s.drive ? '在资源管理器中可以直接访问 ' + s.drive : '用 WebDAV 客户端连接 ' + s.webdav) : (!s.logged_in ? '登录后即可把云盘挂载为本地磁盘' : (s.token_expired ? '请重新登录后再挂载' : (s.mount_supported ? '点击按钮，将云盘挂载为 ' + (s.drive || 'Z:') : '当前系统不支持映射盘符，可启动 WebDAV 服务后用客户端连接')));
+
+    const btn = $('mainBtn');
+    if (busy) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>' + esc(s.message || '处理中…'); }
+    else if (s.mounted || s.phase === 'running') { btn.disabled = false; btn.textContent = s.drive ? '卸载盘符' : '停止服务'; btn.classList.add('danger'); }
+    else { btn.disabled = !s.logged_in || s.token_expired; btn.textContent = s.mount_supported ? '挂载到 ' + (s.drive || 'Z:') : '启动 WebDAV 服务'; btn.classList.remove('danger'); }
+
+    const err = $('heroErr');
+    if (s.error) { err.textContent = s.error; err.classList.remove('hidden'); }
+    else err.classList.add('hidden');
+
+    $('loginCard').classList.toggle('hidden', s.logged_in && !s.token_expired);
+    $('accountCard').classList.toggle('hidden', !s.logged_in);
+    if (s.pending_phone && !$('phone').value) $('phone').value = s.pending_phone;
+  }
+
+  async function refreshStatus() {
+    try { renderStatus(await api('/api/status')); }
+    catch (e) { setPill('err', '面板连接失败'); }
+  }
+
+  async function act(fn, okMsg) {
+    if (S.busy) return;
+    S.busy = true;
+    try { const r = await fn(); if (okMsg) toast(okMsg); return r; }
+    catch (e) { toast(e.message, true); }
+    finally { S.busy = false; refreshStatus(); }
+  }
+
+  $('mainBtn').addEventListener('click', () => {
+    if (S.status && (S.status.mounted || S.status.phase === 'running')) act(() => api('/api/unmount', {}), '正在卸载…');
+    else act(() => api('/api/mount', {}), '正在挂载…');
+  });
+
+  function startCountdown() {
+    S.countdown = 60; $('resendBtn').disabled = true; clearInterval(S.timer);
+    S.timer = setInterval(() => {
+      S.countdown -= 1;
+      if (S.countdown <= 0) { clearInterval(S.timer); $('resendBtn').disabled = false; $('resendBtn').textContent = '重新发送'; }
+      else $('resendBtn').textContent = S.countdown + ' 秒后重发';
+    }, 1000);
+  }
+
+  async function sendCode() {
+    const phone = $('phone').value.trim();
+    if (!/^1\d{10}$/.test(phone)) { toast('请输入 11 位手机号', true); return; }
+    const r = await act(() => api('/api/login/send', { phone }), '验证码已发送，请查收短信');
+    if (r) { $('stepCode').classList.remove('hidden'); $('code').focus(); startCountdown(); }
+  }
+  $('sendBtn').addEventListener('click', sendCode);
+  $('resendBtn').addEventListener('click', sendCode);
+  $('phone').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCode(); });
+  $('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('loginBtn').click(); });
+  $('loginBtn').addEventListener('click', () => {
+    const phone = $('phone').value.trim(); const code = $('code').value.trim();
+    if (!code) { toast('请输入验证码', true); return; }
+    act(async () => {
+      $('loginBtn').disabled = true;
+      try { await api('/api/login/verify', { phone, code }); }
+      finally { $('loginBtn').disabled = false; }
+      $('code').value = ''; $('stepCode').classList.add('hidden'); toast('登录成功');
+    });
+  });
+  $('logoutBtn').addEventListener('click', () => {
+    openModal({ title: '退出登录', value: '', confirmOnly: true, text: '确定退出登录？盘符会先被卸载。', ok: '退出', danger: true }, () => act(() => api('/api/logout', {}), '已退出登录'));
+  });
+
+  // ---------- 文件 ----------
+  function renderCrumbs() {
+    const box = $('crumbs'); box.innerHTML = '';
+    S.crumbs.forEach((c, i) => {
+      const b = document.createElement('button'); b.textContent = c.name;
+      b.addEventListener('click', () => gotoCrumb(i));
+      box.appendChild(b);
+      if (i < S.crumbs.length - 1) { const s = document.createElement('span'); s.className = 'sep'; s.textContent = '›'; box.appendChild(s); }
+    });
+  }
+
+  function gotoCrumb(i) { S.crumbs = S.crumbs.slice(0, i + 1); S.folder = S.crumbs[i].id; loadFiles(false); }
+
+  async function loadFiles(silent) {
+    const state = $('fileState');
+    if (!silent) { state.classList.remove('hidden'); state.textContent = '加载中…'; }
+    try {
+      const data = await api('/api/files?folder=' + encodeURIComponent(S.folder));
+      S.files = data.items; S.selected.clear();
+      renderFiles();
+      state.classList.add('hidden');
+    } catch (e) {
+      state.classList.remove('hidden');
+      state.textContent = e.message;
+      $('fileBody').innerHTML = '';
+    }
+    renderCrumbs();
+  }
+
+  function renderFiles() {
+    const body = $('fileBody');
+    body.innerHTML = '';
+    if (!S.files.length) {
+      body.innerHTML = '<tr><td colspan="5" class="empty">这个文件夹是空的</td></tr>';
+    }
+    for (const f of S.files) {
+      const tr = document.createElement('tr');
+      tr.className = f.is_dir ? 'dir' : '';
+      tr.dataset.id = f.id;
+      tr.innerHTML =
+        '<td class="check"><input type="checkbox" class="pick"></td>' +
+        '<td><span class="fileicon">' + (f.is_dir ? '▸' : '▫') + '</span><span class="name">' + esc(f.name) + '</span></td>' +
+        '<td class="size">' + (f.is_dir ? '—' : fmtSize(f.size)) + '</td>' +
+        '<td class="date">' + esc(fmtDate(f.updated)) + '</td>' +
+        '<td class="act">' + (f.is_dir ? '' : '<button class="btn ghost sm dl">下载</button> ') + '<button class="btn ghost sm rn">重命名</button></td>';
+      tr.querySelector('.pick').addEventListener('change', (e) => {
+        e.target.checked ? S.selected.add(f.id) : S.selected.delete(f.id); updateDelete();
+      });
+      tr.querySelector('.rn').addEventListener('click', () => openModal({ title: '重命名', value: f.name }, async (val) => {
+        await api('/api/files/rename', { id: f.id, name: val, parent: S.folder }); toast('已重命名'); loadFiles(true);
+      }));
+      const dl = tr.querySelector('.dl');
+      if (dl) dl.addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.href = '/api/files/download?' + new URLSearchParams({ id: f.id, name: f.name, size: f.size || 0 });
+        a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+      });
+      if (f.is_dir) tr.querySelector('.name').addEventListener('click', () => { S.crumbs.push({ id: f.id, name: f.name }); S.folder = f.id; loadFiles(false); });
+      body.appendChild(tr);
+    }
+    $('checkAll').checked = false; updateDelete();
+  }
+
+  function updateDelete() {
+    const b = $('deleteBtn'); const n = S.selected.size;
+    b.classList.toggle('hidden', n === 0);
+    b.textContent = '删除所选（' + n + '）';
+  }
+
+  $('checkAll').addEventListener('change', (e) => {
+    document.querySelectorAll('#fileBody .pick').forEach((cb) => { cb.checked = e.target.checked; const id = cb.closest('tr').dataset.id; e.target.checked ? S.selected.add(id) : S.selected.delete(id); });
+    updateDelete();
+  });
+  $('refreshBtn').addEventListener('click', () => loadFiles(false));
+  $('newFolderBtn').addEventListener('click', () => openModal({ title: '新建文件夹', value: '' }, async (val) => {
+    await api('/api/files/mkdir', { parent: S.folder, name: val }); toast('已创建'); loadFiles(true);
+  }));
+  $('deleteBtn').addEventListener('click', () => openModal({ title: '删除 ' + S.selected.size + ' 项？', value: '', confirmOnly: true, text: '删除后会进入云盘回收站。', ok: '删除', danger: true }, async () => {
+    await api('/api/files/delete', { ids: [...S.selected], parent: S.folder }); toast('已删除'); loadFiles(true);
+  }));
+  $('openDriveBtn').addEventListener('click', () => act(() => api('/api/open-drive', {}), '已打开'));
+
+  // ---------- 上传 ----------
+  function uploadOne(file, parent, idx, total) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/files/upload?' + new URLSearchParams({ parent, name: file.name }));
+      xhr.setRequestHeader('X-MCM', '1');
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      const label = (total > 1 ? '(' + (idx + 1) + '/' + total + ') ' : '') + file.name;
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round(e.loaded / e.total * 100);
+        $('uploadBar').style.width = pct + '%';
+        $('uploadText').textContent = pct < 100 ? '正在发送 ' + label + ' … ' + pct + '%' : '正在上传到云盘 ' + label + ' …';
+      };
+      xhr.onload = () => {
+        let data = {}; try { data = JSON.parse(xhr.responseText); } catch (_) {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data); else reject(new Error(data.error || ('上传失败 ' + xhr.status)));
+      };
+      xhr.onerror = () => reject(new Error('上传失败：连接中断'));
+      xhr.send(file);
+    });
+  }
+  $('uploadBtn').addEventListener('click', () => $('uploadInput').click());
+  $('uploadInput').addEventListener('change', async (e) => {
+    const files = [...e.target.files]; e.target.value = '';
+    if (!files.length) return;
+    const parent = S.folder; let okN = 0;
+    $('uploadBox').classList.remove('hidden'); $('uploadBtn').disabled = true;
+    for (let i = 0; i < files.length; i++) {
+      $('uploadBar').style.width = '0';
+      try { const r = await uploadOne(files[i], parent, i, files.length); okN++; if (r.rapid) toast(files[i].name + '：秒传成功'); }
+      catch (err) { toast(files[i].name + '：' + err.message, true); }
+    }
+    $('uploadBox').classList.add('hidden'); $('uploadBtn').disabled = false;
+    if (okN) toast('已上传 ' + okN + ' 个文件');
+    if (S.folder === parent) loadFiles(true);
+  });
+
+  // ---------- WebClient ----------
+  async function checkWebClient() {
+    try {
+      const w = await api('/api/webclient');
+      $('wcCard').classList.toggle('hidden', !(w.supported && w.needs_fix));
+      if (w.supported && w.needs_fix) {
+        const mb = Math.round((w.file_size_limit || 50000000) / 1e6);
+        $('wcDesc').textContent = '当前单文件上限约 ' + mb + ' MB' + (w.auto_start ? '' : '，WebClient 服务未设为自动启动') + '。超过上限的文件无法通过盘符复制。';
+      }
+    } catch (_) {}
+  }
+  $('wcFixBtn').addEventListener('click', () => act(async () => {
+    $('wcFixBtn').disabled = true;
+    try { await api('/api/webclient/fix', {}); } finally { $('wcFixBtn').disabled = false; }
+    checkWebClient();
+  }, '已优化 WebClient 设置。已挂载的盘符需要卸载后重新挂载才会生效'));
+
+  // ---------- 退出 ----------
+  $('quitBtn').addEventListener('click', () => openModal({ title: '退出 mCloudMount', confirmOnly: true, text: '退出后盘符会被卸载，后台服务停止。', ok: '退出', danger: true }, async () => {
+    await api('/api/quit', {});
+    document.body.innerHTML = '<div style="padding:60px;text-align:center;font-size:16px">mCloudMount 已退出，可以关闭此页面。</div>';
+  }));
+
+  // ---------- 设置 ----------
+  async function loadSettings() {
+    try {
+      const s = await api('/api/settings'); S.settings = s;
+      $('autostartToggle').checked = !!s.autostart;
+      $('autostartToggle').disabled = !s.autostart_supported;
+      $('automountToggle').checked = !!s.auto_mount;
+      $('trayChip').textContent = s.tray_available ? '运行中' : '不可用';
+      if (!s.autostart_supported) $('autostartDesc').textContent = '仅支持 Windows';
+      $('mountCard').classList.toggle('hidden', !s.mount_supported);
+      const sel = $('driveSelect'); sel.innerHTML = '';
+      for (const d of s.drives || []) { const o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o); }
+      sel.value = s.drive;
+      $('portInput').value = s.port;
+      $('wdAddr').textContent = 'http://127.0.0.1:' + s.port + '/';
+      $('wdUser').textContent = s.webdav_user || '—';
+      $('wdPass').dataset.v = s.webdav_password || '';
+      $('wdPass').textContent = s.webdav_password ? '••••••' : '（首次挂载时生成）';
+      $('wdShow').textContent = '显示';
+      $('cfgDir').textContent = '配置与日志目录：' + s.config_dir;
+    } catch (e) { toast(e.message, true); }
+  }
+  $('autostartToggle').addEventListener('change', (e) => act(() => api('/api/settings', { autostart: e.target.checked }), e.target.checked ? '已开启开机自启' : '已关闭开机自启').then(loadSettings));
+  $('driveSelect').addEventListener('change', (e) => act(() => api('/api/settings', { drive: e.target.value }), '盘符已改为 ' + e.target.value).then(loadSettings));
+  $('portSave').addEventListener('click', () => act(() => api('/api/settings', { port: parseInt($('portInput').value, 10) }), '端口已保存').then(loadSettings));
+  $('wdShow').addEventListener('click', () => {
+    const el = $('wdPass'); if (!el.dataset.v) return;
+    const showing = $('wdShow').textContent === '隐藏';
+    el.textContent = showing ? '••••••' : el.dataset.v; $('wdShow').textContent = showing ? '显示' : '隐藏';
+  });
+  $('automountToggle').addEventListener('change', (e) => act(() => api('/api/settings', { auto_mount: e.target.checked }), e.target.checked ? '已开启自动挂载' : '已关闭自动挂载'));
+
+  // ---------- 日志 ----------
+  async function refreshLogs() {
+    try {
+      const { lines } = await api('/api/logs');
+      const box = $('logs');
+      const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+      box.innerHTML = '';
+      for (const line of lines) {
+        const div = document.createElement('div');
+        const m = line.match(/\s(ERROR|WARNING|INFO)\s/); if (m) div.className = 'lv-' + m[1];
+        div.textContent = line; box.appendChild(div);
+      }
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    } catch (_) {}
+  }
+  $('logToggle').addEventListener('click', () => {
+    const hidden = $('logs').classList.toggle('hidden');
+    $('logToggle').textContent = hidden ? '展开' : '收起';
+  });
+
+  // ---------- 弹窗 ----------
+  function openModal(opts, onOk) {
+    $('modalTitle').textContent = opts.title;
+    const input = $('modalInput');
+    input.value = opts.value || '';
+    input.parentElement.classList.toggle('hidden', !!opts.confirmOnly);
+    $('modalErr').className = 'notice err hidden';
+    const ok = $('modalOk');
+    ok.textContent = opts.ok || '确定';
+    ok.className = 'btn' + (opts.danger ? ' danger' : '');
+    $('modal').classList.add('show');
+    if (!opts.confirmOnly) setTimeout(() => input.focus(), 30);
+    const close = () => { $('modal').classList.remove('show'); ok.onclick = null; };
+    $('modalCancel').onclick = close;
+    ok.onclick = async () => {
+      const val = input.value.trim();
+      if (!opts.confirmOnly && !val) { $('modalErr').textContent = '名称不能为空'; $('modalErr').className = 'notice err'; return; }
+      try { await onOk(val); close(); }
+      catch (e) { $('modalErr').textContent = e.message; $('modalErr').className = 'notice err'; }
+    };
+    input.onkeydown = (e) => { if (e.key === 'Enter') ok.click(); if (e.key === 'Escape') close(); };
+    if (opts.text) { const p = $('modalErr'); p.textContent = opts.text; p.className = 'notice'; }
+  }
+
+  // ---------- 启动 ----------
+  refreshStatus(); refreshLogs(); checkWebClient();
+  setInterval(() => { if (!document.hidden) checkWebClient(); }, 30000);
+  setInterval(() => { if (!document.hidden) refreshStatus(); }, 3000);
+  setInterval(() => { if (!document.hidden) refreshLogs(); }, 2000);
+  route();
+})();
+</script>
+</body>
+</html>
