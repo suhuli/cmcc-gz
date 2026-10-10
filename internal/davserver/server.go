@@ -51,7 +51,7 @@ func New(fsys *davfs.FS, opts Options) *Server {
 	s := &Server{opts: opts, fs: fsys, auth: newAuthenticator(opts.User, opts.Password, "mCloudMount")}
 	s.dav = &webdav.Handler{
 		FileSystem: fsys,
-		LockSystem: webdav.NewMemLS(),
+		LockSystem: newLenientLS(),
 		Logger:     s.logRequest,
 	}
 	return s
@@ -173,6 +173,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("MS-Author-Via", "DAV")
 	w.Header().Set("Cache-Control", "no-cache")
+
+	// 锁只作兼容（见 lenientLS）。If 头仅用于 LOCK 刷新；其他请求忽略它，否则 x/net/webdav 会因
+	// 令牌所带主机名不匹配（如 Windows 的 127.0.0.1@8380 写法）或格式问题直接返回 412/400。
+	if r.Method != "LOCK" {
+		r.Header.Del("If")
+	}
 
 	ctx := r.Context()
 	switch r.Method {

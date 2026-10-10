@@ -258,8 +258,8 @@ func TestLockAndProppatch(t *testing.T) {
 	if token == "" {
 		t.Fatal("no lock token")
 	}
-	// 未带锁令牌的写入被拒绝
-	e.expect(e.do("PUT", "/l.txt", []byte("x"), nil), 423)
+	// 单用户本地挂载：锁仅作兼容，未带令牌的写入也必须成功（Windows WebClient 常不带令牌）
+	e.expect(e.do("PUT", "/l.txt", []byte("x"), nil), 201, 204)
 	e.expect(e.do("PUT", "/l.txt", []byte("locked write"), map[string]string{"If": "(" + token + ")"}), 201, 204)
 	e.expect(e.do("UNLOCK", "/l.txt", nil, map[string]string{"Lock-Token": token}), 204)
 
