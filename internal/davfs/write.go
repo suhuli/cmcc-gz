@@ -114,12 +114,15 @@ type writeFile struct {
 	writeErr error
 	mod      time.Time
 	closed   bool
+	truncate bool // 打开时要求清空文件（O_TRUNC）
+	wrote    bool // 是否收到过写入
 }
 
 func (w *writeFile) Write(p []byte) (int, error) {
 	if w.closed {
 		return 0, fs.ErrClosed
 	}
+	w.wrote = true
 	if w.pos != w.size {
 		w.seqOK = false
 	}
@@ -190,6 +193,11 @@ func (w *writeFile) Close() error {
 		return &fs.PathError{Op: "close", Path: w.path, Err: problem}
 	}
 
+	// 既没有写入、也没有要求清空：保持云端文件不变（保险措施，防止误覆盖）
+	if !w.wrote && !w.truncate && w.existing != nil {
+		w.restorePlaceholder()
+		return nil
+	}
 	if w.size == 0 {
 		switch {
 		case w.existing == nil:

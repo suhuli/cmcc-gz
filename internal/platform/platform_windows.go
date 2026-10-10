@@ -283,22 +283,31 @@ func GetWebClientInfo() WebClientInfo {
 		if v, _, err := k.GetIntegerValue("FileSizeLimitInBytes"); err == nil {
 			info.FileSizeLimit = uint32(v)
 		}
+		if v, _, err := k.GetIntegerValue("SendReceiveTimeoutInSec"); err == nil {
+			info.Timeout = uint32(v)
+		}
 		k.Close()
 	}
 	if info.FileSizeLimit == 0 {
 		info.FileSizeLimit = DefaultFileSizeLimit
 	}
-	info.NeedsFix = info.FileSizeLimit < RecommendedFileSizeLimit || !info.AutoStart
+	if info.Timeout == 0 {
+		info.Timeout = DefaultTimeout
+	}
+	info.NeedsFix = info.FileSizeLimit < RecommendedFileSizeLimit || info.Timeout < RecommendedTimeout || !info.AutoStart
 	return info
 }
 
-// SetupWebClient 需要管理员权限：放宽单文件大小上限、设为自动启动并重启服务。
+// SetupWebClient 需要管理员权限：放宽单文件大小上限与请求超时、设为自动启动并重启服务。
 func SetupWebClient() error {
 	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, webClientParamsKey, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("写入注册表失败（需要管理员权限）: %w", err)
 	}
 	err = k.SetDWordValue("FileSizeLimitInBytes", RecommendedFileSizeLimit)
+	if err == nil {
+		err = k.SetDWordValue("SendReceiveTimeoutInSec", RecommendedTimeout)
+	}
 	k.Close()
 	if err != nil {
 		return fmt.Errorf("写入注册表失败: %w", err)

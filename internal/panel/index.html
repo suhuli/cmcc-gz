@@ -195,10 +195,10 @@
 
       <div class="card warncard hidden" id="wcCard">
         <h2>建议优化 Windows WebClient 设置</h2>
-        <div class="muted small" id="wcDesc">Windows 默认限制通过网络驱动器复制的单个文件不能超过 50 MB，且 WebClient 服务不会自动启动。</div>
+        <div class="muted small" id="wcDesc">Windows 默认限制通过网络驱动器复制的单个文件不能超过 50 MB，请求超时只有 60 秒，且 WebClient 服务不会自动启动。</div>
         <div class="row" style="margin-top:12px;align-items:center">
           <button class="btn" id="wcFixBtn">一键优化（需要管理员授权）</button>
-          <span class="muted small">将单文件上限调整为 4 GB 并设为自动启动，只需操作一次。</span>
+          <span class="muted small">单文件上限调整为 4 GB、超时延长到 1 小时并设为自动启动，只需操作一次。</span>
         </div>
       </div>
 
@@ -583,7 +583,11 @@
       $('wcCard').classList.toggle('hidden', !(w.supported && w.needs_fix));
       if (w.supported && w.needs_fix) {
         const mb = Math.round((w.file_size_limit || 50000000) / 1e6);
-        $('wcDesc').textContent = '当前单文件上限约 ' + mb + ' MB' + (w.auto_start ? '' : '，WebClient 服务未设为自动启动') + '。超过上限的文件无法通过盘符复制。';
+        const issues = [];
+        if (w.file_size_limit < 4294967295) issues.push('单文件上限只有约 ' + mb + ' MB（超过的文件无法通过盘符复制）');
+        if ((w.timeout || 60) < 3600) issues.push('请求超时只有 ' + (w.timeout || 60) + ' 秒（较大的文件上传到云盘需要更久，会被 Windows 判定失败）');
+        if (!w.auto_start) issues.push('WebClient 服务未设为自动启动');
+        $('wcDesc').textContent = '当前' + issues.join('；') + '。';
       }
     } catch (_) {}
   }

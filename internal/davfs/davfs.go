@@ -330,7 +330,9 @@ func (f *FS) retryConsistency(ctx context.Context, op func() error) error {
 // OpenFile 打开文件或目录。写入模式返回暂存到本地临时文件的句柄，Close 时上传。
 func (f *FS) OpenFile(ctx context.Context, name string, flag int, _ os.FileMode) (webdav.File, error) {
 	name = clean(name)
-	if flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0 {
+	// 只有创建/截断/只写/追加才是真正的写入。单独的 O_RDWR 来自 PROPPATCH
+	// （webdav 用它取得属性句柄，不会写入内容）：若按写入处理，关闭时会用 0 字节覆盖文件。
+	if flag&(os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND) != 0 {
 		return f.openWrite(ctx, name, flag)
 	}
 	if name == "/" {
@@ -363,7 +365,8 @@ func (f *FS) openWrite(ctx context.Context, name string, flag int) (webdav.File,
 		unlock()
 		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
 	}
-	w := &writeFile{fs: f, path: name, parent: parent, name: base, ctx: ctx, guard: guardFrom(ctx), unlock: unlock, mod: time.Now()}
+	w := &writeFile{fs: f, path: name, parent: parent, name: base, ctx: ctx, guard: guardFrom(ctx), unlock: unlock, mod: time.Now(),
+		truncate: flag&os.O_TRUNC != 0}
 	if p := f.pending.take(key(name)); p != nil {
 		w.placeholder = p
 	} else {

@@ -18,11 +18,20 @@ type WebClientInfo struct {
 	Running       bool   `json:"running"`
 	AutoStart     bool   `json:"auto_start"`
 	FileSizeLimit uint32 `json:"file_size_limit"` // 字节；0 表示未知
-	NeedsFix      bool   `json:"needs_fix"`
+	// Timeout 是 WebClient 等待服务器响应的秒数（SendReceiveTimeoutInSec，默认 60）。
+	// 上传大文件时需要等待文件传到云盘才会响应，60 秒不够用。
+	Timeout  uint32 `json:"timeout"`
+	NeedsFix bool   `json:"needs_fix"`
 }
 
 // RecommendedFileSizeLimit 是建议的 WebClient 单文件上限（约 4 GB，即最大值）。
 const RecommendedFileSizeLimit = 0xFFFFFFFF
+
+// RecommendedTimeout 是建议的 WebClient 请求超时（秒）。
+const RecommendedTimeout = 3600
+
+// DefaultTimeout 是 Windows 默认的 WebClient 请求超时（秒）。
+const DefaultTimeout = 60
 
 // DefaultFileSizeLimit 是 Windows 默认的单文件上限（50 MB）。
 const DefaultFileSizeLimit = 50000000
